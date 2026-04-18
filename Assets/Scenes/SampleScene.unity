@@ -680,6 +680,39 @@ GameObject:
   m_CorrespondingSourceObject: {fileID: 3032334164735723895, guid: 66d40221d132d04499855da9ce315f20, type: 3}
   m_PrefabInstance: {fileID: 1364055689}
   m_PrefabAsset: {fileID: 0}
+--- !u!1 &513717904 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 6646764989444387255, guid: 86a5bf68cb51f4e44bd3893bd22a2ba7, type: 3}
+  m_PrefabInstance: {fileID: 1766750150}
+  m_PrefabAsset: {fileID: 0}
+--- !u!114 &513717907
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 513717904}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d3bdcbfa063d0fe4a9d7f9e1b832aae1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: MRTemplate::UnityEngine.XR.Templates.MR.SyringeOverlayTracker
+  m_MinPlungerToWings: 0.016
+  m_MaxPlungerToWings: 0.065
+  m_WingsToBarrelEnd: 0.06
+  m_BarrelEndToNeedleTip: 0.048
+  m_MetalNeedleLength: 0.025
+  m_LineMaterialOverride: {fileID: 0}
+  m_OverlayColor: {r: 0, g: 0.95, b: 1, a: 0.95}
+  m_LineWidth: 0.0025
+  m_JointMarkerSize: 0.003
+  m_DrawJointMarkers: 1
+  m_PositionSmoothing: 0.35
+  m_HasValidTracking: 0
+  m_PlungerPoint: {x: 0, y: 0, z: 0}
+  m_WingsCenterPoint: {x: 0, y: 0, z: 0}
+  m_BarrelEndPoint: {x: 0, y: 0, z: 0}
+  m_NeedleTipPoint: {x: 0, y: 0, z: 0}
 --- !u!4 &522728844 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 4342425361971797402, guid: b6d57cedc6a73c94aad8ce006a26b41b, type: 3}
@@ -2352,7 +2385,10 @@ PrefabInstance:
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
-    m_AddedComponents: []
+    m_AddedComponents:
+    - targetCorrespondingSourceObject: {fileID: 6646764989444387255, guid: 86a5bf68cb51f4e44bd3893bd22a2ba7, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 513717907}
   m_SourcePrefab: {fileID: 100100000, guid: 86a5bf68cb51f4e44bd3893bd22a2ba7, type: 3}
 --- !u!114 &1766750153 stripped
 MonoBehaviour:
