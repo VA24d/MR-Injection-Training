@@ -1,0 +1,33 @@
+Body Pose Detection
+Updated: Nov 6, 2025
+A body pose represents the shape of a body skeleton, which is represented as local joint poses and joint poses from the root joint. It must construct a skeleton pose by referencing the skeleton mapping. For an overview of the body input data stack, see Input Data.
+IBodyPose
+IBodyPose is the interface through which a body pose is consumed. It contains GetJointPoseLocal and GetJointPoseFromRoot methods, and exposes ISkeletonMapping which allows the consumer to query the joint set and parent/child relationships of each joint. Different skeletons have different joint sets, so you can use ISkeletonMapping to get a scapula or shoulder joint in one skeleton that doesn’t exist in another. You can also use it to find the parent of a joint, which is often used to determine relative position and rotation.
+BodyPoseData is the serialized ScriptableObject representation of a BodyPose, and can be used to store and recall pose data. To create an empty BodyPoseData object, on the menu, go to Meta > Interaction > Body Pose Recorder.
+PoseFromBody
+PoseFromBody takes IBody and exposes IBodyPose. It is used to drive any component that takes an IBodyPose, such as a debug visual or body mesh.
+The AutoUpdate boolean determines whether PoseFromBody should update automatically as the IBody data is updated. When set to true, it updates along with the IBody. When false, it doesn’t. Setting AutoUpdate to false and calling the UpdatePose() method explicitly can be used to take snapshots of the current pose of the IBody.
+BodyPoseComparerActiveState
+The BodyPoseComparerActiveState is a pose recognition component that compares local joint orientations between IBodyPoses. With it you can select which joints to monitor and what the maximum angle delta between each joint should be. If all joints are within this maximum range, the IActiveState becomes Active.
+Body Pose Comparer image
+Body Pose Recording
+Interaction SDK contains an editor tool under Meta > Interaction > Body Pose Recorder for capturing body poses into BodyPoseData ScriptableObjects. These ScriptableObjects can then be shipped with your application and used for pose comparison as preset body poses, or for driving body models for in-game pose teaching. This utility must be used in Play Mode in the Unity Editor in order to capture your live body pose.
+Body Pose Recorder window image
+Property	Description
+Source
+The IBody that will supply joint data for the captured pose. This will be auto-wired to the first IBody found in your scene, or you can override it as needed.
+Target Asset
+An optional BodyPoseData ScriptableObject that the pose will be captured into. If none is provided, a new asset will be created for each captured pose, and written to Assets/BodyPoses.
+Capture Delay
+The time between pressing the Capture Body Pose button and the actual capture.
+Play Sound On Capture
+If checked, a system beep will be played when the timer elapses and a pose is captured.
+Learn more
+Related topics
+For an overview of the body input data stack, see Input Data.
+Design guidelines
+Designing safety and user empowerment in social immersive apps: Empower users, to confidently manage their participation in social virtual spaces.
+Designing for privacy: Help users feel safe and build trust with privacy design.
+Localization: Learn about localization and translation.
+Accessibility: Learn about accessibility and how to make your app accessible.
+Comfort: Learn about how to make your app comfortable for your users.

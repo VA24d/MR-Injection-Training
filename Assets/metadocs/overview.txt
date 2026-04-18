@@ -1,0 +1,39 @@
+Supported platforms
+Unity
+User Input and Interactions
+Detecting Poses
+Updated: Aug 7, 2025
+Interaction SDK provides the ability to detect whether the user is performing a specific pose. This is useful for triggering events, such as starting a game, or for enabling or disabling features. The topics below cover how to create and detect specific hand and body poses.
+Custom Hand Poses
+Custom Hand Poses
+Moving the player through virtual space
+Learn more
+Hand Pose Recorder
+Hand Pose Recorder
+Tool to record a pose from live data
+Learn more
+Hand Pose Detection
+Hand Pose Detection
+Detecting specific hand and body poses made by the player
+Learn more
+Body Pose Detection
+Body Pose Detection
+Moving the player through virtual space
+Learn more
+Compare Body Poses
+Compare Body Poses
+Interacting with user interfaces using direct touch or ray casting
+Learn more
+Samples
+PoseExamples Scene
+Pose Examples
+Moving the player through virtual space
+Learn more
+GestureExamples Scene
+Gesture Examples
+Interacting with user interfaces using direct touch or ray casting
+Learn more
+BodyPoseDetectionExamples Scene
+Body Pose Examples
+Detecting specific hand and body poses made by the player
+Learn more

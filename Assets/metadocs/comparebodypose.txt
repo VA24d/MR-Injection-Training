@@ -1,0 +1,117 @@
+Compare Body Poses
+Updated: Nov 6, 2025
+Meta’s XR Interaction SDK for Unity includes a body pose recorder you can use to capture a pose. You can then use the captured pose to pose a skeleton, like in the BodyPoseDetectionExamples scene, or check if your current pose matches the captured pose.
+In this tutorial, you learn how to capture a pose, compare the captured pose to your current pose, and visually display the degree of alignment between your body and the captured pose.
+Before you begin
+Complete Getting Started with Interaction SDK.
+Set up Link⁠ (requires a Windows computer). Later on, you’ll use Link to capture a pose while you’re running a scene. Building and running an APK won’t work.
+Get body tracking data
+To get body tracking data, you need to access the body tracking data provided by the headset.
+Open the Unity scene where you completed Getting Started with Interaction SDK.
+In the Project panel, search for OVRBody. The OVRBody prefab provides body tracking data from the headset. Ensure the search filter is set to either All or In Packages, since the default setting only searches your assets.
+ovrbody prefab in the search results
+Drag the OVRBody prefab from the search results into the hierarchy onto OVRCameraRigInteraction > OVRCameraRig > OVRInteractionComprehensive.
+ovrbody prefab in the hierarchy
+The location of the OVRBody prefab in the hierarchy.
+Under Hierarchy, select OVRCameraRigInteraction > OVRCameraRig > OVRInteractionComprehensive > OVRBody > OVRBodyDataSource.
+Under Inspector, in the From OVR Body Data Source component, set Camera Rig Ref to the OVRInteractionComprehensive GameObject.
+(Optional) In the OVR Body component, set Provided Skeleton Type to Full Body if you want body tracking data for both the legs and upper body.
+Under Inspector, add a Pose from Body component by clicking the Add Component button and searching for Pose From Body. This component converts the raw tracking data to a pose. A pose is an Interaction SDK data structure containing data about the skeleton’s joints.
+In the inspector, the OVRBodyDataSource GameObject should have these components.
+OVRBodyDataSource Inspector showing FromOVRBodyDataSource and PoseFromBody components.
+In the Pose from Body component, set the Body field to the OVRBody GameObject.
+The body field
+Below the Body field, ensure Auto Update is selected. This means that every time your body moves, the body tracking data will also update, ensuring you always have the latest body tracking data.
+Save your scene.
+Record a body pose
+Once you have access to the headset’s body tracking data, you can use Interaction SDK’s body pose recorder to save a snapshot of your body tracking data at a specific point in time.
+Open Interaction SDK’s body pose recorder by going to Meta > Interaction > Body Pose Recorder.
+The pose recorder
+The Body Pose Recorder window opens and says it only works in Play mode.
+Pose recorder message
+In the Unity editor, click the Play button.
+While in Play mode, in the Unity editor, click the Capture Body Pose button, then quickly perform the pose you want to record. Perform the pose until you hear the sound play on your computer, which indicates the pose was recorded. If you need more time to make the pose, you can increase the Capture Delay setting.
+Capture body pose button
+Exit Play mode.
+To make sure your pose was recorded, check the BodyPoses folder under Assets > BodyPoses. You should see a file that starts with the name BodyPose- and the time of recording (ex. BodyPose-20240419-122429).
+The captured pose stored as an asset
+An example of a recorded pose in the BodyPoses folder. Unlike the folder in the screenshot, your folder will contain only one pose.
+Add components to compare poses
+Once you’ve saved a body pose, you need to create some new GameObjects with specific components so you can compare your saved pose to the headset’s live body tracking information.
+Under Hierarchy, create a new empty GameObject named BodyPoseComparer. This GameObject will display the pose you must match.
+As a child of BodyPoseComparer, create a new empty GameObject named SkeletonVisuals. This GameObject will contain the visual components.
+As another child of BodyPoseComparer, add a second empty GameObject and name it SwitchedPose. This GameObject will contain the logic components.
+Your hierarchy should look like this.
+Children of the BodyPoseComparer GameObject
+Under Hierarchy, select the BodyPoseComparer GameObject.
+Under Inspector, add these components.
+Body Pose Comparer Active State
+Locked Body Pose
+Active State Unity Event Wrapper
+Audio Source (optional). This tutorial uses the Audio Source component to play a sound whenever the current pose matches the recorded pose, but you could do something different.
+The inspector should look like this.
+BodyPoseComparer Inspector showing BodyPoseComparerActiveState, LockedBodyPose, and ActiveStateUnityEventWrapper components.
+In the Transform component, set the Position field values as follows.
+X: -0.05
+Y: 0.2
+Z: 2
+In the Rotation field, set the Y value to 180.
+The Transform component should look like this.
+BodyPose transform values
+Under Hierarchy, select the SkeletonVisuals GameObject.
+Under Inspector, add these components. Together, both of them will display the captured pose.
+Body Pose Debug Gizmos
+Body Pose Comparer Active State Debug Visual
+The inspector should look like this.
+SkeletonVisuals components
+Under Hierarchy, select the SwitchedPose GameObject.
+Under Inspector, add a Body Pose Switcher component.
+The inspector should look like this.
+SwitchedPose component
+Set component values
+For the body pose comparison logic to function, you need to set the fields of the components.
+In a new instance of Unity, open the DebugBodyPoseComparer sample scene. To save time, you’ll copy a component from this scene to your scene.
+Under Hierarchy, select the BodyPoseComparer GameObject.
+Under Inspector, in the Body Pose Comparer Active State component, select the three dots and click Copy Component.
+Copying component
+Return to your original scene.
+Under Hierarchy, select the BodyPoseComparer GameObject.
+Under Inspector, in the Body Pose Comparer Active State component, select the three dots and click Paste Component Values.
+Pasting component
+A list of configs is added to the component. Each element in the list is a body joint that will be checked for alignment. Usually, you have to add each element manually.
+Pasted configs
+The list of pasted configs.
+Still in the Body Pose Comparer Active State component, set the fields as follows.
+Pose A: OVRBodyDataSource GameObject. If prompted to pick a component, select the Pose From Body component.
+Pose B: SwitchedPose GameObject. If prompted to pick a component, select the Body Pose Switcher component.
+Component values
+In the Locked Body Pose component, set Pose to the SwitchedPose GameObject. If prompted to pick a component, select the Body Pose Switcher component.
+Component values
+In the Active State Unity Event Wrapper component, set Active State to the BodyPoseComparer GameObject.
+Event wrapper
+(Optional) In the When Activated() field, add an element to the list.
+(Optional) Drag the Audio Source component onto the None (Object) field.
+(Optional) Click the No Function dropdown and select AudioSource > PlayOneShot (AudioClip).
+(Optional) Set the None (Audio Clip) field to an audio clip that should play when you match the recorded pose.
+Under Hierarchy, select the SkeletonVisuals GameObject.
+Under Inspector, in the Body Pose Debug Gizmos component, set the fields as follows.
+Visibility: Joints, Bones
+Body Pose: BodyPoseComparer GameObject
+Debug gizmos
+In the Body Pose Comparer Active State Debug Visual component, set the fields as follows.
+Body Pose Comparer:BodyPoseComparer GameObject
+Body Pose: BodyPoseComparer GameObject
+Root: SkeletonVisuals GameObject
+Debug visual
+Under Hierarchy, select the SwitchedPose GameObject.
+Under Inspector, in the Body Pose Switcher component, set the fields as follows.
+Pose A: The ScriptableAsset of the pose you recorded. It’s in the BodyPoses folder under Assets > BodyPoses.
+Pose B: The OVRBodyDataSource GameObject.
+Source: Pose A.
+Bodypose switcher
+Test the pose comparison
+Prepare to launch your scene by going to File > Build Profiles and clicking the Add Open Scenes button. Your scene is now ready to build.
+Select File > Build And Run, or if you have a Link connected, click Play. The scene loads. The world is empty except for a skeleton showing your recorded pose. Whenever you match the recorded pose, the Body Pose Comparer Active State becomes true, triggering the audio clip (if you added one), or whatever you specified in your Active State Unity Event Wrapper.
+Video: User interactions with the BodyPoseComparer object.
+
+Whenever the user’s body aligns with the required pose, all of the debug orbs turn green and a sound plays.
