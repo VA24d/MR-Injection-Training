@@ -134,6 +134,8 @@ namespace UnityEngine.XR.Templates.MR
         /// </summary>
         public void OnDestroyObjectsButtonClicked()
         {
+            ClearRuntimeSelectedSurfaces();
+
             while (m_SpawnedObjects.Count > 0)
             {
                 SpawnedObjectHelper spawnedObject = m_SpawnedObjects[0];
@@ -159,6 +161,8 @@ namespace UnityEngine.XR.Templates.MR
         /// </summary>
         public async void DeleteAnchors()
         {
+            ClearRuntimeSelectedSurfaces();
+
             m_AnchorText.text = "<b><u><align=center>- Deleted Persistent Anchors -</b></u></align>\n";
             await EraseAnchorsAsync();
 
@@ -415,6 +419,13 @@ namespace UnityEngine.XR.Templates.MR
         string SpawnedObjectName(int id)
         {
             return id < 0 ? "Random" : m_Spawner.objectPrefabs[id].name;
+        }
+
+        void ClearRuntimeSelectedSurfaces()
+        {
+            var tools = FindObjectsByType<SurfaceSelectionTool>(FindObjectsSortMode.None);
+            for (var i = 0; i < tools.Length; ++i)
+                tools[i].ClearPlacedSurface();
         }
     }
 
