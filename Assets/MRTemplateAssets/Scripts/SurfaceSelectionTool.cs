@@ -5,7 +5,7 @@ using UnityEngine.XR.Hands;
 namespace UnityEngine.XR.Templates.MR
 {
     /// <summary>
-    /// Supports a 2-pinch workflow for selecting a horizontal surface from hand tracking.
+    /// Supports a 3-pinch workflow for selecting a horizontal surface from hand tracking.
     /// </summary>
     public class SurfaceSelectionTool : MonoBehaviour
     {
@@ -45,6 +45,22 @@ namespace UnityEngine.XR.Templates.MR
         public bool isSelectingSurface => m_IsSelectingSurface;
         public bool hasPlacedSurface => m_HasPlacedSurface;
         public int completedPinches => m_HasPlacedSurface ? 3 : (m_HasSecondPoint ? 2 : (m_HasFirstPoint ? 1 : 0));
+
+        public bool TryGetPlacedSurface(out Pose surfacePose, out Vector2 sizeMeters)
+        {
+            surfacePose = default;
+            sizeMeters = default;
+
+            if (!m_HasPlacedSurface || m_SurfacePlane == null || !m_SurfacePlane.gameObject.activeInHierarchy)
+                return false;
+
+            surfacePose = new Pose(m_SurfacePlane.position, m_SurfacePlane.rotation);
+
+            // Unity Plane primitive is 10x10 units before scaling.
+            var scale = m_SurfacePlane.lossyScale;
+            sizeMeters = new Vector2(Mathf.Abs(scale.x) * 10f, Mathf.Abs(scale.z) * 10f);
+            return true;
+        }
 
         XRHandSubsystem m_HandSubsystem;
         static List<XRHandSubsystem> s_HandSubsystems;

@@ -77,6 +77,9 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField]
         SyringeOverlayTracker m_Tracker;
 
+        [SerializeField]
+        SyringePlaneAngleOverlay m_PlaneAngleOverlay;
+
         [Header("Coaching text")]
         [SerializeField]
         TextMeshProUGUI m_CoachingTitleText;
@@ -169,6 +172,9 @@ namespace UnityEngine.XR.Templates.MR
 
             if (m_SurfaceSelectionTool == null)
                 m_SurfaceSelectionTool = FindAnyObjectByType<SurfaceSelectionTool>();
+
+            if (m_PlaneAngleOverlay == null)
+                m_PlaneAngleOverlay = FindAnyObjectByType<SyringePlaneAngleOverlay>();
 #else
             if (m_InjectionTutorial == null)
                 m_InjectionTutorial = FindObjectOfType<SyringeCalibrationButtonBridge>();
@@ -178,14 +184,25 @@ namespace UnityEngine.XR.Templates.MR
 
             if (m_SurfaceSelectionTool == null)
                 m_SurfaceSelectionTool = FindObjectOfType<SurfaceSelectionTool>();
+
+            if (m_PlaneAngleOverlay == null)
+                m_PlaneAngleOverlay = FindObjectOfType<SyringePlaneAngleOverlay>();
 #endif
+
+            var host = m_InjectionTutorial != null ? m_InjectionTutorial.gameObject : gameObject;
 
             if (m_SurfaceSelectionTool == null)
             {
-                var host = m_InjectionTutorial != null ? m_InjectionTutorial.gameObject : gameObject;
                 m_SurfaceSelectionTool = host.GetComponent<SurfaceSelectionTool>();
                 if (m_SurfaceSelectionTool == null)
                     m_SurfaceSelectionTool = host.AddComponent<SurfaceSelectionTool>();
+            }
+
+            if (m_PlaneAngleOverlay == null)
+            {
+                m_PlaneAngleOverlay = host.GetComponent<SyringePlaneAngleOverlay>();
+                if (m_PlaneAngleOverlay == null)
+                    m_PlaneAngleOverlay = host.AddComponent<SyringePlaneAngleOverlay>();
             }
 
             if (m_CoachingTitleText == null || m_CoachingBodyText == null)
