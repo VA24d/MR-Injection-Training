@@ -1074,6 +1074,13 @@ namespace UnityEngine.XR.Templates.MR
 
         void OnPreviousStepButtonClicked()
         {
+            if (m_InjectionTutorial == null)
+                return;
+
+            // Matches SyringeCalibrationButtonBridge.PreviousStep early-exit — avoids useless sync when UI was wrong.
+            if (m_InjectionTutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.Start)
+                return;
+
             ForceEndAllGoals();
             RefreshActionButtons(force: true);
         }
@@ -1117,6 +1124,8 @@ namespace UnityEngine.XR.Templates.MR
             if (!m_ShowActionButtonsForCurrentStepOnly)
             {
                 SetAllActionBarButtonsActive(true);
+                // Still hide Previous on the first step (bridge no-ops) and Next on final score — otherwise taps feel "broken".
+                ApplyNavigationButtonsVisibilityForStep(step);
                 return;
             }
 
@@ -1185,6 +1194,19 @@ namespace UnityEngine.XR.Templates.MR
                     Set(m_DemoVideoButtonObject, demoOk);
                     break;
             }
+        }
+
+        /// <summary>
+        /// Previous must be off on <see cref="SyringeCalibrationButtonBridge.TutorialStep.Start"/> (no prior step).
+        /// Next is off on <see cref="SyringeCalibrationButtonBridge.TutorialStep.FinalScore"/> (flow ends there).
+        /// </summary>
+        void ApplyNavigationButtonsVisibilityForStep(SyringeCalibrationButtonBridge.TutorialStep step)
+        {
+            if (m_PreviousStepButtonObject != null)
+                m_PreviousStepButtonObject.SetActive(step != SyringeCalibrationButtonBridge.TutorialStep.Start);
+
+            if (m_NextStepButtonObject != null)
+                m_NextStepButtonObject.SetActive(step != SyringeCalibrationButtonBridge.TutorialStep.FinalScore);
         }
 
         void SetAllActionBarButtonsActive(bool active)
