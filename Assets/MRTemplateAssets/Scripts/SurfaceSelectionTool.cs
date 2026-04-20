@@ -254,8 +254,16 @@ namespace UnityEngine.XR.Templates.MR
             var secondFlat = new Vector3(second.x, y, second.z);
 
             // Treat the two pinch points as opposite diagonal corners on the horizontal XZ plane.
-            var width = Mathf.Max(Mathf.Abs(secondFlat.x - firstFlat.x), m_MinSurfaceWidth);
-            var depth = Mathf.Max(Mathf.Abs(secondFlat.z - firstFlat.z), m_MinSurfaceDepth);
+            var width = Mathf.Abs(secondFlat.x - firstFlat.x);
+            var depth = Mathf.Abs(secondFlat.z - firstFlat.z);
+
+            // Keep corners true to pinch positions; only guard against a fully collapsed axis.
+            const float kMinRenderableDimension = 0.001f;
+            if (width < kMinRenderableDimension)
+                width = kMinRenderableDimension;
+            if (depth < kMinRenderableDimension)
+                depth = kMinRenderableDimension;
+
             var center = new Vector3(
                 0.5f * (firstFlat.x + secondFlat.x),
                 y,
