@@ -1,7 +1,7 @@
 using System.Collections;
+using System;
 using UnityEngine.XR.Interaction.Toolkit;
 using UnityEngine.XR.Interaction.Toolkit.Interactables;
-using UnityEngine.UI;
 using MovementType = UnityEngine.XR.Interaction.Toolkit.Interactables.XRBaseInteractable.MovementType;
 using LazyFollow = UnityEngine.XR.Interaction.Toolkit.UI.LazyFollow;
 
@@ -28,6 +28,7 @@ namespace UnityEngine.XR.Templates.MR
     {
         const string GrabStripObjectName = "RayGrabStrip";
         const string GrabHandleVisualName = "Reposition Handle Visual";
+        const string DemoHandleSourceObjectName = "Spatial Panel Manipulator";
 
         [SerializeField]
         [Tooltip("If null, uses LazyFollow on this GameObject.")]
@@ -51,8 +52,13 @@ namespace UnityEngine.XR.Templates.MR
 
         [SerializeField]
         [Tooltip("Fraction of canvas height used for the ray-grab strip along the chosen edge.")]
-        [Range(0.05f, 0.35f)]
-        float m_GrabStripHeightFraction = 0.18f;
+        [Range(0.04f, 0.2f)]
+        float m_GrabStripHeightFraction = 0.09f;
+
+        [SerializeField]
+        [Tooltip("Offset in meters that places the grab strip outside the panel edge (below for Bottom, above for Top).")]
+        [Min(0f)]
+        float m_GrabStripOutsideOffset = 0.012f;
 
         [SerializeField]
         [Tooltip("Extra depth (meters) added to the grab collider along local Z (toward the user).")]
@@ -79,8 +85,12 @@ namespace UnityEngine.XR.Templates.MR
         Rigidbody m_Rigidbody;
         BoxCollider m_Box;
         Transform m_GrabStripTransform;
-        RectTransform m_GrabHandleVisual;
-        Image m_GrabHandleVisualImage;
+        Transform m_GrabHandleVisualModel;
+        SkinnedMeshRenderer m_GrabHandleVisualRenderer;
+        Mesh m_DemoHandleMesh;
+        Material m_DemoHandleMaterial;
+        Vector3 m_DemoHandleScale = new(0.2f, 0.2f, 0.2f);
+        float m_DemoHandleBlendShape0 = 5f;
 
         LazyFollow.PositionFollowMode m_StoredPositionMode = LazyFollow.PositionFollowMode.Follow;
         LazyFollow.RotationFollowMode m_StoredRotationMode = LazyFollow.RotationFollowMode.LookAtWithWorldUp;
@@ -173,12 +183,18 @@ namespace UnityEngine.XR.Templates.MR
 
         void ConfigureGrabInteractable()
         {
-            // All interaction layers — project/Quest presets often use non-default layers; mask "1" breaks far-ray grab.
-            m_Grab.interactionLayers = new InteractionLayerMask { value = -1 };
+            // Match the working Spatial Panel Manipulator interaction mask.
+            m_Grab.interactionLayers = new InteractionLayerMask { value = 1 };
+            m_Grab.useDynamicAttach = true;
+            m_Grab.matchAttachPosition = true;
+            m_Grab.matchAttachRotation = true;
+            m_Grab.snapToColliderVolume = true;
+            m_Grab.reinitializeDynamicAttachEverySingleGrab = true;
+            m_Grab.attachEaseInTime = 0f;
             m_Grab.trackPosition = true;
             m_Grab.trackRotation = !m_PositionOnlyWhileGrabbed;
-            // Same movement mode as Spatial Panel Manipulator on the demo video (m_MovementType: VelocityTracking).
-            m_Grab.movementType = MovementType.VelocityTracking;
+            // Match Spatial Panel Manipulator (runtime reports Instantaneous for this object).
+            m_Grab.movementType = MovementType.Instantaneous;
             m_Grab.throwOnDetach = false;
             m_Grab.smoothPosition = true;
             m_Grab.smoothPositionAmount = 5f;
@@ -206,7 +222,10 @@ namespace UnityEngine.XR.Templates.MR
             var canvas = FindCoachingCardCanvas();
             if (canvas == null)
             {
-                var y = m_GrabStripAnchor == GrabStripVerticalAnchor.Top ? 0.12f : -0.12f;
+                var yBase = m_GrabStripAnchor == GrabStripVerticalAnchor.Top ? 0.12f : -0.12f;
+                var y = m_GrabStripAnchor == GrabStripVerticalAnchor.Top
+                    ? yBase + m_GrabStripOutsideOffset
+                    : yBase - m_GrabStripOutsideOffset;
                 m_GrabStripTransform.localPosition = new Vector3(0f, y, 0f);
                 m_Box.center = Vector3.zero;
                 m_Box.size = new Vector3(0.35f, 0.05f, m_ColliderDepth);
@@ -222,18 +241,18 @@ namespace UnityEngine.XR.Templates.MR
             var fullWidth = (corners[2] - corners[1]).magnitude;
             var fullHeight = (corners[1] - corners[0]).magnitude;
             var stripH = Mathf.Max(fullHeight * m_GrabStripHeightFraction, 0.015f);
-            var stripHCanvasLocal = Mathf.Max(rt.rect.height * m_GrabStripHeightFraction, 16f);
+            var outsideOffsetWorld = Mathf.Max(m_GrabStripOutsideOffset, 0f);
 
             Vector3 stripCenterWorld;
             if (m_GrabStripAnchor == GrabStripVerticalAnchor.Top)
             {
                 var topMid = (corners[1] + corners[2]) * 0.5f;
-                stripCenterWorld = topMid - up * (stripH * 0.5f);
+                stripCenterWorld = topMid + up * (outsideOffsetWorld + stripH * 0.5f);
             }
             else
             {
                 var bottomMid = (corners[0] + corners[3]) * 0.5f;
-                stripCenterWorld = bottomMid + up * (stripH * 0.5f);
+                stripCenterWorld = bottomMid - up * (outsideOffsetWorld + stripH * 0.5f);
             }
 
             // Keep the strip aligned to the canvas in the root's local space (handles scale/rotation).
@@ -243,73 +262,136 @@ namespace UnityEngine.XR.Templates.MR
             // Collider size is in the strip's local space; account for root/canvas scale.
             var wLocal = m_GrabStripTransform.InverseTransformVector(right * fullWidth).magnitude;
             var hLocal = m_GrabStripTransform.InverseTransformVector(up * stripH).magnitude;
-            var zDepth = Mathf.Max(m_ColliderDepth, 0.02f);
+            var zDepth = Mathf.Max(m_ColliderDepth, 0.04f);
 
-            m_Box.center = Vector3.zero;
+            // We do not want the grab strip to significantly overlap the UI canvas, 
+            // otherwise the XRGrabInteractable steals raycasts from UI buttons!
+            // If we enforce a minimum height, we must appropriately center the box down further.
+            float finalH = Mathf.Max(hLocal, 0.06f); // 6cm minimum height instead of 10cm
+            
+            // Re-adjust local center so the top edge of this box doesn't bleed into the canvas
+            // If finalH > hLocal, we push the center down by half the difference.
+            float yOffset = 0f;
+            if (finalH > hLocal) {
+                yOffset = (m_GrabStripAnchor == GrabStripVerticalAnchor.Top) ? (finalH - hLocal) * 0.5f : -(finalH - hLocal) * 0.5f;
+            }
+
+            m_Box.center = new Vector3(0f, yOffset, 0f);
             m_Box.size = new Vector3(
-                Mathf.Max(wLocal, 0.02f),
-                Mathf.Max(hLocal, 0.015f),
+                Mathf.Max(wLocal, 0.1f),
+                finalH,
                 zDepth);
             m_Box.isTrigger = false;
 
-            m_GrabStripTransform.gameObject.layer = gameObject.layer;
-
-            var visualHeight = Mathf.Min(stripHCanvasLocal, m_HandleVisualMaxHeight);
-            UpdateGrabHandleVisual(rt, visualHeight);
+            // Ensure the grab strip is on the Default layer (0) so XR Ray Interactors hit it reliably,
+            // even if the Coaching UI root is on the UI layer (5) which rays might ignore.
+            m_GrabStripTransform.gameObject.layer = 0;
+            UpdateGrabHandleVisual();
         }
 
-        void UpdateGrabHandleVisual(RectTransform canvasRect, float stripHeightCanvasLocal)
+        void UpdateGrabHandleVisual()
         {
             if (!m_ShowHandleVisual)
             {
-                if (m_GrabHandleVisual != null)
-                    m_GrabHandleVisual.gameObject.SetActive(false);
+                if (m_GrabHandleVisualModel != null)
+                    m_GrabHandleVisualModel.gameObject.SetActive(false);
                 return;
             }
 
-            if (m_GrabHandleVisual == null || m_GrabHandleVisualImage == null)
+            if (!EnsureGrabHandleVisualModel())
             {
-                var existing = canvasRect.Find(GrabHandleVisualName);
+                // If demo assets are unavailable, hide the handle instead of drawing a mismatched flat bar.
+                if (m_GrabHandleVisualModel != null)
+                    m_GrabHandleVisualModel.gameObject.SetActive(false);
+                return;
+            }
+
+            if (m_GrabHandleVisualModel == null || m_GrabHandleVisualRenderer == null || m_Box == null)
+                return;
+
+            m_GrabHandleVisualModel.gameObject.SetActive(true);
+            m_GrabHandleVisualModel.localPosition = Vector3.zero;
+            m_GrabHandleVisualModel.localRotation = Quaternion.identity;
+            m_GrabHandleVisualModel.gameObject.layer = gameObject.layer;
+
+            m_GrabHandleVisualModel.localScale = m_DemoHandleScale;
+            if (m_GrabHandleVisualRenderer.sharedMesh != null && m_GrabHandleVisualRenderer.sharedMesh.blendShapeCount > 0)
+                m_GrabHandleVisualRenderer.SetBlendShapeWeight(0, m_DemoHandleBlendShape0);
+        }
+
+        bool EnsureGrabHandleVisualModel()
+        {
+            if (m_GrabStripTransform == null)
+                return false;
+
+            if (m_GrabHandleVisualRenderer != null && m_DemoHandleMesh != null && m_DemoHandleMaterial != null)
+                return true;
+
+            if (m_DemoHandleMesh == null || m_DemoHandleMaterial == null)
+            {
+                if (!TryResolveDemoHandleAssets())
+                    return false;
+            }
+
+            if (m_GrabHandleVisualModel == null)
+            {
+                var existing = m_GrabStripTransform.Find(GrabHandleVisualName);
                 if (existing != null)
-                {
-                    m_GrabHandleVisual = existing as RectTransform;
-                    if (m_GrabHandleVisual != null)
-                        m_GrabHandleVisualImage = m_GrabHandleVisual.GetComponent<Image>();
-                }
-
-                if (m_GrabHandleVisual == null)
-                {
-                    var go = new GameObject(GrabHandleVisualName, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-                    m_GrabHandleVisual = go.GetComponent<RectTransform>();
-                    m_GrabHandleVisual.SetParent(canvasRect, false);
-                    m_GrabHandleVisualImage = go.GetComponent<Image>();
-                }
+                    m_GrabHandleVisualModel = existing;
             }
 
-            if (m_GrabHandleVisual == null || m_GrabHandleVisualImage == null)
-                return;
-
-            m_GrabHandleVisual.gameObject.SetActive(true);
-            m_GrabHandleVisualImage.raycastTarget = false;
-            m_GrabHandleVisualImage.color = m_HandleVisualColor;
-
-            if (m_GrabStripAnchor == GrabStripVerticalAnchor.Top)
+            if (m_GrabHandleVisualModel == null)
             {
-                m_GrabHandleVisual.anchorMin = new Vector2(0f, 1f);
-                m_GrabHandleVisual.anchorMax = new Vector2(1f, 1f);
-                m_GrabHandleVisual.pivot = new Vector2(0.5f, 1f);
-                m_GrabHandleVisual.anchoredPosition = Vector2.zero;
-            }
-            else
-            {
-                m_GrabHandleVisual.anchorMin = new Vector2(0f, 0f);
-                m_GrabHandleVisual.anchorMax = new Vector2(1f, 0f);
-                m_GrabHandleVisual.pivot = new Vector2(0.5f, 0f);
-                m_GrabHandleVisual.anchoredPosition = Vector2.zero;
+                var go = new GameObject(GrabHandleVisualName);
+                m_GrabHandleVisualModel = go.transform;
+                m_GrabHandleVisualModel.SetParent(m_GrabStripTransform, false);
             }
 
-            m_GrabHandleVisual.sizeDelta = new Vector2(0f, stripHeightCanvasLocal);
-            m_GrabHandleVisual.SetAsLastSibling();
+            if (m_GrabHandleVisualRenderer == null && m_GrabHandleVisualModel != null)
+                m_GrabHandleVisualRenderer = m_GrabHandleVisualModel.GetComponent<SkinnedMeshRenderer>();
+
+            if (m_GrabHandleVisualRenderer == null && m_GrabHandleVisualModel != null)
+                m_GrabHandleVisualRenderer = m_GrabHandleVisualModel.gameObject.AddComponent<SkinnedMeshRenderer>();
+
+            if (m_GrabHandleVisualRenderer == null)
+                return false;
+
+            m_GrabHandleVisualRenderer.sharedMesh = m_DemoHandleMesh;
+            m_GrabHandleVisualRenderer.sharedMaterial = m_DemoHandleMaterial;
+            m_GrabHandleVisualRenderer.updateWhenOffscreen = true;
+            return m_GrabHandleVisualRenderer.sharedMesh != null && m_GrabHandleVisualRenderer.sharedMaterial != null;
+        }
+
+        bool TryResolveDemoHandleAssets()
+        {
+            if (m_DemoHandleMesh != null && m_DemoHandleMaterial != null)
+                return true;
+
+            var renderers = Resources.FindObjectsOfTypeAll<SkinnedMeshRenderer>();
+            for (var i = 0; i < renderers.Length; i++)
+            {
+                var renderer = renderers[i];
+                if (renderer == null || renderer.gameObject == null)
+                    continue;
+
+                if (!renderer.gameObject.scene.IsValid())
+                    continue;
+
+                if (!string.Equals(renderer.gameObject.name, DemoHandleSourceObjectName, StringComparison.Ordinal))
+                    continue;
+
+                if (renderer.sharedMesh == null || renderer.sharedMaterial == null)
+                    continue;
+
+                m_DemoHandleMesh = renderer.sharedMesh;
+                m_DemoHandleMaterial = renderer.sharedMaterial;
+                m_DemoHandleScale = renderer.transform.lossyScale;
+                if (renderer.sharedMesh != null && renderer.sharedMesh.blendShapeCount > 0)
+                    m_DemoHandleBlendShape0 = renderer.GetBlendShapeWeight(0);
+                return true;
+            }
+
+            return false;
         }
 
         void OnSelectEntered(SelectEnterEventArgs _)
@@ -318,8 +400,11 @@ namespace UnityEngine.XR.Templates.MR
                 m_Rigidbody.isKinematic = false;
 
             m_UserPinned = false;
-            m_Rigidbody.linearVelocity = Vector3.zero;
-            m_Rigidbody.angularVelocity = Vector3.zero;
+            if (!m_Rigidbody.isKinematic)
+            {
+                m_Rigidbody.linearVelocity = Vector3.zero;
+                m_Rigidbody.angularVelocity = Vector3.zero;
+            }
 
             if (m_LazyFollow == null)
                 return;
@@ -334,8 +419,11 @@ namespace UnityEngine.XR.Templates.MR
         void OnSelectExited(SelectExitEventArgs _)
         {
             // Kill release momentum so the panel does not drift away after drag.
-            m_Rigidbody.linearVelocity = Vector3.zero;
-            m_Rigidbody.angularVelocity = Vector3.zero;
+            if (!m_Rigidbody.isKinematic)
+            {
+                m_Rigidbody.linearVelocity = Vector3.zero;
+                m_Rigidbody.angularVelocity = Vector3.zero;
+            }
 
             if (m_LockRigidbodyWhenNotGrabbed)
                 m_Rigidbody.isKinematic = true;
@@ -365,8 +453,11 @@ namespace UnityEngine.XR.Templates.MR
 
             if (m_Rigidbody != null)
             {
-                m_Rigidbody.linearVelocity = Vector3.zero;
-                m_Rigidbody.angularVelocity = Vector3.zero;
+                if (!m_Rigidbody.isKinematic)
+                {
+                    m_Rigidbody.linearVelocity = Vector3.zero;
+                    m_Rigidbody.angularVelocity = Vector3.zero;
+                }
                 if (m_LockRigidbodyWhenNotGrabbed)
                     m_Rigidbody.isKinematic = true;
             }
@@ -388,8 +479,11 @@ namespace UnityEngine.XR.Templates.MR
 
             if (m_Rigidbody != null)
             {
-                m_Rigidbody.linearVelocity = Vector3.zero;
-                m_Rigidbody.angularVelocity = Vector3.zero;
+                if (!m_Rigidbody.isKinematic)
+                {
+                    m_Rigidbody.linearVelocity = Vector3.zero;
+                    m_Rigidbody.angularVelocity = Vector3.zero;
+                }
                 if (m_LockRigidbodyWhenNotGrabbed)
                     m_Rigidbody.isKinematic = true;
             }

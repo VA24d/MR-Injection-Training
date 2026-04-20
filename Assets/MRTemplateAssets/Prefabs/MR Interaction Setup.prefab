@@ -790,6 +790,7 @@ MonoBehaviour:
   m_SkipButton: {fileID: 0}
   m_LearnButton: {fileID: 0}
   m_LearnModal: {fileID: 0}
+  m_LearnModalCanvasGroup: {fileID: 0}
   m_LearnModalButton: {fileID: 0}
   m_CoachingUIParent: {fileID: 0}
   m_GoalPanelLazyFollow: {fileID: 0}
@@ -798,6 +799,49 @@ MonoBehaviour:
   m_VideoPlayerToggle: {fileID: 0}
   m_FeatureController: {fileID: 9101303414712244912}
   m_ObjectSpawner: {fileID: 3339367952642848919}
+  m_PassthroughToggle: {fileID: 0}
+  m_FadeMaterial: {fileID: 0}
+  m_InjectionTutorial: {fileID: 0}
+  m_Tracker: {fileID: 0}
+  m_PlaneAngleOverlay: {fileID: 0}
+  m_HandOverlayBridge: {fileID: 0}
+  m_CoachingTitleText: {fileID: 0}
+  m_CoachingBodyText: {fileID: 0}
+  m_SyncCoachingText: 1
+  m_AutoHideLearnButton: 1
+  m_ReapplyHeadFollowOnTutorialSync: 0
+  m_StartWithCoachingHeadFollow: 0
+  m_AddActionButtonsToCoachingMenu: 1
+  m_CalibrateButtonName: Calibrate Syringe Button
+  m_CreateSurfaceButtonName: Create Surface Button
+  m_SkeletonToggleButtonName: Skeleton Toggle Button
+  m_PreviousStepButtonName: Previous Step Button
+  m_NextStepButtonName: Next Step Button
+  m_SwapHandsButtonName: Swap Hands Button
+  m_InjectionTypeButtonName: Injection Type Button
+  m_DemoVideoButtonName: Demo Video Button
+  m_DemoVideoCaption: Demo Video
+  m_ShowActionButtonsForCurrentStepOnly: 1
+  m_CalibrateIdleLabel: Calibrate Syringe
+  m_CalibratingLabelPrefix: Calibrating
+  m_CalibratedLabel: Recalibrate Syringe
+  m_CreateSurfaceIdleLabel: Create Surface
+  m_CreateSurfaceSelectingLabel: Creating Surface
+  m_CreateSurfacePlacedLabel: Recreate Surface
+  m_ShowSkeletonLabel: Show Skeleton
+  m_HideSkeletonLabel: Hide Skeleton
+  m_PreviousStepLabel: Previous Step
+  m_NextStepLabel: Next Step
+  m_UseLeftHandLabel: Use Left Hand
+  m_UseRightHandLabel: Use Right Hand
+  m_InjectionTypeLabelPrefix: Injection Type
+  m_ActionButtonVerticalSpacing: 6
+  m_NavigationRowPairOffset: 78
+  m_CoachingCardExtraHeightForActions: 220
+  m_ShowCoachingMetricsHud: 0
+  m_MetricsHudGapPx: 10
+  m_MetricsHudMinHeight: 52
+  m_MetricsHudMaxHeight: 200
 --- !u!1 &2662485833752745289
 GameObject:
   m_ObjectHideFlags: 0
@@ -3649,6 +3693,9 @@ MonoBehaviour:
   m_UIToggleObject: {fileID: 0}
   m_QuestSettings: {fileID: 0}
   m_AndroidXRSettings: {fileID: 0}
+  m_OnHandOcclusionChanged:
+    m_PersistentCalls:
+      m_Calls: []
 --- !u!4 &5684662119113075334 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 2162714242004346942, guid: d6878e1999eb4b44a9f5a263af86c185, type: 3}
@@ -3749,7 +3796,6 @@ MonoBehaviour:
   m_ScreenCoordScaleBias: {x: 0, y: 0, z: 0, w: 0}
   m_RequiresDepthTexture: 0
   m_RequiresColorTexture: 0
-  m_Version: 2
   m_TaaSettings:
     m_Quality: 3
     m_FrameInfluence: 0.1
@@ -3757,6 +3803,7 @@ MonoBehaviour:
     m_MipBias: 0
     m_VarianceClampScale: 0.9
     m_ContrastAdaptiveSharpening: 0
+  m_Version: 2
 --- !u!114 &6383843704645534559
 MonoBehaviour:
   m_ObjectHideFlags: 0

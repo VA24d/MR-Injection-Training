@@ -223,6 +223,9 @@ namespace UnityEngine.XR.Templates.MR
         public void SetHandHandRemovalEnabled(bool isEnabled)
         {
 #if META_OCCLUSION_AVAILABLE
+            if (m_AROcclusionManager == null)
+                return;
+
             var subsystem = m_AROcclusionManager.subsystem as MetaOpenXROcclusionSubsystem;
             if (subsystem != null && subsystem.isHandRemovalSupported == Supported.Supported)
             {

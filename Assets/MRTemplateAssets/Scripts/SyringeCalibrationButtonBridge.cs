@@ -600,6 +600,7 @@ namespace UnityEngine.XR.Templates.MR
 #if UNITY_EDITOR
         void HandleEditorDebugInput()
         {
+#if ENABLE_LEGACY_INPUT_MANAGER
             if (Input.GetKeyDown(KeyCode.Alpha1))
                 SetInjectionType(InjectionType.Intramuscular);
             else if (Input.GetKeyDown(KeyCode.Alpha2))
@@ -614,6 +615,7 @@ namespace UnityEngine.XR.Templates.MR
 
             if (Input.GetKeyDown(KeyCode.N))
                 AdvanceStep();
+#endif
         }
 #endif
     }

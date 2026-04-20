@@ -709,6 +709,7 @@ MonoBehaviour:
   m_DrawJointMarkers: 1
   m_PositionSmoothing: 0.35
   m_UseHandFrameDirectionAssist: 1
+  m_TrackLeftHand: 1
   m_HandFrameDirectionBlend: 0.65
   m_DirectionSmoothing: 0.6
   m_AutoGripCalibration: 1
@@ -726,14 +727,34 @@ MonoBehaviour:
   m_MarkerSearchRadiusPixels: 42
   m_MarkerColorTolerance: 0.16
   m_CpuImageUpdateInterval: 0.05
+  m_CpuImageTransformation: 0
   m_MarkerDotColor: {r: 1, g: 0.92, b: 0.1, a: 0.95}
   m_MarkerDotSize: 0.0045
   m_LogCalibrationEvents: 0
+  m_ForceMarkerOnlyAfterCalibration: 1
+  m_EnableMarkerDebug: 1
+  m_ShowSearchRegion: 1
+  m_ShowMarkerTrail: 1
+  m_ShowMarkerDebugText: 1
+  m_UseDisplayMatrixForCpuMapping: 0
+  m_MarkerSearchStep: 1
+  m_MinMarkerHitsForDetection: 2
+  m_MaxMarkerJumpPixels: 72
+  m_MarkerTrailMaxPoints: 96
+  m_MarkerTrailMinPointDistance: 0.002
+  m_MarkerTrailColor: {r: 1, g: 0.2, b: 0.2, a: 0.9}
+  m_SearchRegionColor: {r: 1, g: 0.55, b: 0.1, a: 0.95}
+  m_DetectedCandidateColor: {r: 0.1, g: 1, b: 0.1, a: 0.95}
   m_HasValidTracking: 0
   m_IsCalibratingMarker: 0
   m_IsMarkerCalibrated: 0
   m_CalibrationTapCount: 0
   m_MarkerConfidence: 0
+  m_TargetMarkerHsv: {x: 0, y: 0, z: 0}
+  m_LastMatchedMarkerHsv: {x: 0, y: 0, z: 0}
+  m_LastMarkerHitCount: 0
+  m_LastMarkerBestScore: 0
+  m_LastMarkerVisible: 0
   m_MarkerWorldPoint: {x: 0, y: 0, z: 0}
   m_PlungerPoint: {x: 0, y: 0, z: 0}
   m_WingsCenterPoint: {x: 0, y: 0, z: 0}
@@ -753,6 +774,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: MRTemplate::UnityEngine.XR.Templates.MR.HandOverlaySkeletonToggleBridge
   m_ShowSkeletonByDefault: 1
   m_ForceDisableHandRemoval: 1
+  m_HandMenuToggleReference: {fileID: 0}
+  m_HandMenuLabelReference: {fileID: 0}
   m_HandMenuTogglePath: UI/Hand Menu Setup MR Template Variant/Follow GameObject/Spatial
     Panel Scroll/Main Menu/Occlusion Tab/Quest Settings/List Item Boolean Toggle/Offset
     Anchor/Boolean Toggle
@@ -772,16 +795,45 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 013e275c5b6ec304db03c343e868ab17, type: 3}
   m_Name: 
   m_EditorClassIdentifier: MRTemplate::UnityEngine.XR.Templates.MR.SyringeCalibrationButtonBridge
-  m_SettingsTabPath: UI/Hand Menu Setup MR Template Variant/Follow GameObject/Spatial
-    Panel Scroll/Main Menu/Settings Tab
-  m_TemplateButtonPath: UI/Hand Menu Setup MR Template Variant/Follow GameObject/Spatial
-    Panel Scroll/Main Menu/Settings Tab/Relaunch Coaching Button
-  m_RuntimeButtonName: Syringe Calibration Button
-  m_AddAsLastSibling: 1
-  m_IdleLabel: Start Calibration
-  m_ReadyLabel: Recalibrate Syringe
-  m_MissingTrackerLabel: Calibrate Syringe
-  m_CalibratingLabelPrefix: Calibrating
+  m_DisableWristMenu: 1
+  m_WristMenuRootPath: UI/Hand Menu Setup MR Template Variant
+  m_Tracker: {fileID: 0}
+  m_HandOverlayBridge: {fileID: 0}
+  m_AutoAdvanceStub: 0
+  m_IntroDelaySeconds: 0.6
+  m_TypeSelectionDelaySeconds: 1.25
+  m_DefaultInjectionType: 1
+  m_FillRateNormalizedPerSecond: 0.35
+  m_TargetFillAmount: 1
+  m_BubbleManualFallbackDelay: 2.5
+  m_TargetInjectionAngleRange: {x: 25, y: 55}
+  m_AngleHoldSeconds: 0.8
+  m_TargetInsertionSpeedCmPerSec: 3.5
+  m_TargetFlowRateMlPerSec: 0.6
+  m_TargetRemovalSpeedCmPerSec: 4.5
+  m_SpeedHoldSeconds: 0.8
+  m_CurrentStep: 0
+  m_IsTutorialRunning: 0
+  m_IsFinished: 0
+  m_SelectedInjectionType: 0
+  m_FillAmountNormalized: 0
+  m_BubbleCheckCompleted: 0
+  m_InjectionAngleDegrees: 0
+  m_InsertionSpeedCmPerSec: 0
+  m_FlowRateMlPerSec: 0
+  m_RemovalSpeedCmPerSec: 0
+  m_FinalScore: 0
+  m_LastScoreBreakdown:
+    calibration: 0
+    injectionType: 0
+    fill: 0
+    bubble: 0
+    angle: 0
+    insertion: 0
+    flow: 0
+    removal: 0
+    total: 0
+  m_StepElapsedSeconds: 0
 --- !u!4 &522728844 stripped
 Transform:
   m_CorrespondingSourceObject: {fileID: 4342425361971797402, guid: b6d57cedc6a73c94aad8ce006a26b41b, type: 3}
@@ -1687,7 +1739,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 1435055189130710449, guid: 66d40221d132d04499855da9ce315f20, type: 3}
       propertyPath: m_TargetOffset.y
-      value: 0
+      value: -0.04
       objectReference: {fileID: 0}
     - target: {fileID: 1468271505714249377, guid: 66d40221d132d04499855da9ce315f20, type: 3}
       propertyPath: m_AnchorMax.y
@@ -2440,6 +2492,10 @@ PrefabInstance:
       value: 
       objectReference: {fileID: 593110201}
     - target: {fileID: 9177915868812651432, guid: 86a5bf68cb51f4e44bd3893bd22a2ba7, type: 3}
+      propertyPath: m_StartWithCoachingHeadFollow
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 9177915868812651432, guid: 86a5bf68cb51f4e44bd3893bd22a2ba7, type: 3}
       propertyPath: m_StepList.Array.data[0].stepObject
       value: 
       objectReference: {fileID: 532264445}
@@ -2920,6 +2976,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 2073726594}
+  - component: {fileID: 2073726595}
   m_Layer: 0
   m_Name: UI
   m_TagString: Untagged
@@ -2946,6 +3003,19 @@ Transform:
   - {fileID: 522728844}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &2073726595
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2073726593}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b4249cbec4543804ba3d34e25fa69f11, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: MRTemplate::UnityEngine.XR.Templates.MR.XRStartupFixer
+  m_CoachingUI: {fileID: 1257756836}
 --- !u!1 &2120083480 stripped
 GameObject:
   m_CorrespondingSourceObject: {fileID: 7980650391616948280, guid: 66d40221d132d04499855da9ce315f20, type: 3}
