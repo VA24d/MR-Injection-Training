@@ -1,42 +1,16 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using TMPro;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
 using UnityEngine.XR.Interaction.Toolkit.Samples.StarterAssets;
-using TMPro;
 using LazyFollow = UnityEngine.XR.Interaction.Toolkit.UI.LazyFollow;
-using UnityEngine.XR.ARFoundation;
 
 namespace UnityEngine.XR.Templates.MR
 {
-    public struct Goal
-    {
-        public GoalManager.OnboardingGoals CurrentGoal;
-        public bool Completed;
-
-        public Goal(GoalManager.OnboardingGoals goal)
-        {
-            CurrentGoal = goal;
-            Completed = false;
-        }
-    }
-
     public class GoalManager : MonoBehaviour
     {
-        public enum OnboardingGoals
-        {
-            Empty,
-            FindSurfaces,
-            TapSurface,
-        }
-
-        Queue<Goal> m_OnboardingGoals;
-        Goal m_CurrentGoal;
-        bool m_AllGoalsFinished;
-        int m_SurfacesTapped;
-        int m_CurrentGoalIndex = 0;
-
         [Serializable]
         class Step
         {
@@ -50,7 +24,7 @@ namespace UnityEngine.XR.Templates.MR
         }
 
         [SerializeField]
-        List<Step> m_StepList = new List<Step>();
+        List<Step> m_StepList = new();
 
         [SerializeField]
         public TextMeshProUGUI m_StepButtonTextField;
@@ -82,391 +56,738 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField]
         Toggle m_VideoPlayerToggle;
 
+        // Retained to preserve prefab/scene serialization compatibility.
         [SerializeField]
         ARFeatureController m_FeatureController;
 
+        // Retained to preserve prefab/scene serialization compatibility.
         [SerializeField]
         ObjectSpawner m_ObjectSpawner;
 
-        const int k_NumberOfSurfacesTappedToCompleteGoal = 1;
-        Vector3 m_TargetOffset = new Vector3(-.5f, -.25f, 1.5f);
+        [SerializeField]
+        Toggle m_PassthroughToggle;
+
+        [SerializeField]
+        FadeMaterial m_FadeMaterial;
+
+        [Header("Injection tutorial")]
+        [SerializeField]
+        SyringeCalibrationButtonBridge m_InjectionTutorial;
+
+        [SerializeField]
+        SyringeOverlayTracker m_Tracker;
+
+        [Header("Coaching text")]
+        [SerializeField]
+        TextMeshProUGUI m_CoachingTitleText;
+
+        [SerializeField]
+        TextMeshProUGUI m_CoachingBodyText;
+
+        [SerializeField]
+        bool m_SyncCoachingText = true;
+
+        [SerializeField]
+        bool m_AutoHideLearnButton = true;
+
+        [Header("Coaching action buttons")]
+        [SerializeField]
+        bool m_AddActionButtonsToCoachingMenu = true;
+
+        [SerializeField]
+        string m_CalibrateButtonName = "Calibrate Syringe Button";
+
+        [SerializeField]
+        string m_CreateSurfaceButtonName = "Create Surface Button";
+
+        [SerializeField]
+        string m_CalibrateIdleLabel = "Calibrate Syringe";
+
+        [SerializeField]
+        string m_CalibratingLabelPrefix = "Calibrating";
+
+        [SerializeField]
+        string m_CalibratedLabel = "Recalibrate Syringe";
+
+        [SerializeField]
+        string m_CreateSurfaceIdleLabel = "Create Surface";
+
+        [SerializeField]
+        string m_CreateSurfaceSelectingLabel = "Creating Surface";
+
+        [SerializeField]
+        string m_CreateSurfacePlacedLabel = "Recreate Surface";
+
+        [SerializeField, Min(0f)]
+        float m_ActionButtonVerticalSpacing = 12f;
+
+        SyringeCalibrationButtonBridge.TutorialStep m_LastDisplayedStep;
+        bool m_LastFinishedState;
+        float m_LastScore = -1f;
+        readonly List<TextMeshProUGUI> m_FallbackStepTexts = new();
+
+        SurfaceSelectionTool m_SurfaceSelectionTool;
+        GameObject m_CalibrateButtonObject;
+        Button m_CalibrateButton;
+        TextMeshProUGUI m_CalibrateButtonLabel;
+        string m_LastCalibrateButtonText = string.Empty;
+        GameObject m_CreateSurfaceButtonObject;
+        Button m_CreateSurfaceButton;
+        TextMeshProUGUI m_CreateSurfaceButtonLabel;
+        string m_LastCreateSurfaceButtonText = string.Empty;
+
+        Vector3 m_TargetOffset = new(-.5f, -.25f, 1.5f);
 
         void Start()
         {
-            m_OnboardingGoals = new Queue<Goal>();
-            var welcomeGoal = new Goal(OnboardingGoals.Empty);
-            var findSurfaceGoal = new Goal(OnboardingGoals.FindSurfaces);
-            var tapSurfaceGoal = new Goal(OnboardingGoals.TapSurface);
-            var endGoal = new Goal(OnboardingGoals.Empty);
+            ResolveReferences();
+            InitializeCoachingUI();
+            SyncTutorialToUI(force: true);
+        }
 
-            m_OnboardingGoals.Enqueue(welcomeGoal);
-            m_OnboardingGoals.Enqueue(findSurfaceGoal);
-            m_OnboardingGoals.Enqueue(tapSurfaceGoal);
-            m_OnboardingGoals.Enqueue(endGoal);
+        void OnDestroy()
+        {
+            if (m_LearnButton != null)
+            {
+                var button = m_LearnButton.GetComponent<Button>();
+                if (button != null)
+                    button.onClick.RemoveListener(OpenModal);
+            }
 
-            m_CurrentGoal = m_OnboardingGoals.Dequeue();
+            if (m_LearnModalButton != null)
+                m_LearnModalButton.onClick.RemoveListener(CloseModal);
+        }
+
+        void ResolveReferences()
+        {
+#if UNITY_2023_1_OR_NEWER
+            if (m_InjectionTutorial == null)
+                m_InjectionTutorial = FindAnyObjectByType<SyringeCalibrationButtonBridge>();
+
+            if (m_Tracker == null)
+                m_Tracker = FindAnyObjectByType<SyringeOverlayTracker>();
+
+            if (m_SurfaceSelectionTool == null)
+                m_SurfaceSelectionTool = FindAnyObjectByType<SurfaceSelectionTool>();
+#else
+            if (m_InjectionTutorial == null)
+                m_InjectionTutorial = FindObjectOfType<SyringeCalibrationButtonBridge>();
+
+            if (m_Tracker == null)
+                m_Tracker = FindObjectOfType<SyringeOverlayTracker>();
+
+            if (m_SurfaceSelectionTool == null)
+                m_SurfaceSelectionTool = FindObjectOfType<SurfaceSelectionTool>();
+#endif
+
+            if (m_SurfaceSelectionTool == null)
+            {
+                var host = m_InjectionTutorial != null ? m_InjectionTutorial.gameObject : gameObject;
+                m_SurfaceSelectionTool = host.GetComponent<SurfaceSelectionTool>();
+                if (m_SurfaceSelectionTool == null)
+                    m_SurfaceSelectionTool = host.AddComponent<SurfaceSelectionTool>();
+            }
+
+            if (m_CoachingTitleText == null || m_CoachingBodyText == null)
+                TryResolveFallbackTexts();
+        }
+
+        void InitializeCoachingUI()
+        {
+            if (m_CoachingUIParent != null)
+                m_CoachingUIParent.transform.localScale = Vector3.one;
+
             if (m_TapTooltip != null)
                 m_TapTooltip.SetActive(false);
 
             if (m_VideoPlayer != null)
-            {
                 m_VideoPlayer.SetActive(false);
 
-                if (m_VideoPlayerToggle != null)
-                    m_VideoPlayerToggle.isOn = false;
-            }
+            if (m_VideoPlayerToggle != null)
+                m_VideoPlayerToggle.isOn = false;
 
-            if (m_FeatureController != null)
-                m_FeatureController.TogglePassthrough(false);
+            if (m_LearnModal != null)
+                m_LearnModal.transform.localScale = Vector3.zero;
 
             if (m_LearnButton != null)
             {
-                m_LearnButton.GetComponent<Button>().onClick.AddListener(OpenModal); ;
-                m_LearnButton.SetActive(false);
-            }
+                var button = m_LearnButton.GetComponent<Button>();
+                if (button != null)
+                {
+                    button.onClick.RemoveListener(OpenModal);
+                    button.onClick.AddListener(OpenModal);
+                }
 
-            if (m_LearnModal != null)
-            {
-                m_LearnModal.transform.localScale = Vector3.zero;
+                if (m_AutoHideLearnButton)
+                    m_LearnButton.SetActive(false);
             }
 
             if (m_LearnModalButton != null)
             {
+                m_LearnModalButton.onClick.RemoveListener(CloseModal);
                 m_LearnModalButton.onClick.AddListener(CloseModal);
             }
 
-            if (m_ObjectSpawner == null)
+            for (var i = 0; i < m_StepList.Count; i++)
             {
-#if UNITY_2023_1_OR_NEWER
-                m_ObjectSpawner = FindAnyObjectByType<ObjectSpawner>();
-#else
-                m_ObjectSpawner = FindObjectOfType<ObjectSpawner>();
-#endif
+                if (m_StepList[i].stepObject != null)
+                    m_StepList[i].stepObject.SetActive(i == 0);
             }
 
-            if (m_FeatureController == null)
+            if (m_SkipButton != null)
+                m_SkipButton.SetActive(true);
+
+            CreateOrBindActionButtons();
+            RefreshActionButtons(force: true);
+        }
+
+        void TryResolveFallbackTexts()
+        {
+            m_FallbackStepTexts.Clear();
+
+            if (m_CoachingUIParent == null)
+                return;
+
+            var candidates = m_CoachingUIParent.GetComponentsInChildren<TextMeshProUGUI>(true);
+            foreach (var text in candidates)
             {
-#if UNITY_2023_1_OR_NEWER
-                m_FeatureController = FindAnyObjectByType<ARFeatureController>();
-#else
-                m_FeatureController = FindObjectOfType<ARFeatureController>();
-#endif
+                if (text == null || text == m_StepButtonTextField)
+                    continue;
+
+                m_FallbackStepTexts.Add(text);
             }
+
+            if (m_CoachingTitleText == null && m_FallbackStepTexts.Count > 0)
+                m_CoachingTitleText = m_FallbackStepTexts[0];
+
+            if (m_CoachingBodyText == null && m_FallbackStepTexts.Count > 1)
+                m_CoachingBodyText = m_FallbackStepTexts[1];
+        }
+
+        void Update()
+        {
+            SyncTutorialToUI(force: false);
+            RefreshActionButtons(force: false);
+
+#if UNITY_EDITOR
+            if (Keyboard.current != null && Keyboard.current.spaceKey.wasPressedThisFrame)
+                ForceCompleteGoal();
+#endif
         }
 
         void OpenModal()
         {
             if (m_LearnModal != null)
-            {
                 m_LearnModal.transform.localScale = Vector3.one;
-            }
         }
 
         void CloseModal()
         {
             if (m_LearnModal != null)
-            {
                 m_LearnModal.transform.localScale = Vector3.zero;
-            }
         }
 
-        void Update()
+        void CreateOrBindActionButtons()
         {
-            if (!m_AllGoalsFinished)
-            {
-                ProcessGoals();
-            }
-
-            // Debug Input
-#if UNITY_EDITOR
-            if (Keyboard.current.spaceKey.wasPressedThisFrame)
-            {
-                CompleteGoal();
-            }
-#endif
-        }
-
-        void ProcessGoals()
-        {
-            if (!m_CurrentGoal.Completed)
-            {
-                switch (m_CurrentGoal.CurrentGoal)
-                {
-                    case OnboardingGoals.Empty:
-                        m_GoalPanelLazyFollow.positionFollowMode = LazyFollow.PositionFollowMode.Follow;
-                        break;
-                    case OnboardingGoals.FindSurfaces:
-                        m_GoalPanelLazyFollow.positionFollowMode = LazyFollow.PositionFollowMode.Follow;
-                        break;
-                    case OnboardingGoals.TapSurface:
-                        if (m_TapTooltip != null)
-                        {
-                            m_TapTooltip.SetActive(true);
-                        }
-                        m_GoalPanelLazyFollow.positionFollowMode = LazyFollow.PositionFollowMode.None;
-                        break;
-                }
-            }
-        }
-
-        void CompleteGoal()
-        {
-            if (m_CurrentGoal.CurrentGoal == OnboardingGoals.TapSurface)
-                m_ObjectSpawner.objectSpawned -= OnObjectSpawned;
-
-            // disable tooltips before setting next goal
-            DisableTooltips();
-
-            m_CurrentGoal.Completed = true;
-            m_CurrentGoalIndex++;
-            if (m_OnboardingGoals.Count > 0)
-            {
-                m_CurrentGoal = m_OnboardingGoals.Dequeue();
-                m_StepList[m_CurrentGoalIndex - 1].stepObject.SetActive(false);
-                m_StepList[m_CurrentGoalIndex].stepObject.SetActive(true);
-                m_StepButtonTextField.text = m_StepList[m_CurrentGoalIndex].buttonText;
-                m_SkipButton.SetActive(m_StepList[m_CurrentGoalIndex].includeSkipButton);
-            }
-            else
-            {
-                m_AllGoalsFinished = true;
-                ForceEndAllGoals();
-            }
-
-            if (m_CurrentGoal.CurrentGoal == OnboardingGoals.FindSurfaces)
-            {
-                if (m_FeatureController != null)
-                    m_FeatureController.TogglePassthrough(true);
-
-                if (m_LearnButton != null)
-                {
-                    m_LearnButton.SetActive(true);
-                }
-
-                StartCoroutine(TurnOnPlanes(true));
-            }
-            else if (m_CurrentGoal.CurrentGoal == OnboardingGoals.TapSurface)
-            {
-                if (m_LearnButton != null)
-                {
-                    m_LearnButton.SetActive(false);
-                }
-                m_SurfacesTapped = 0;
-                m_ObjectSpawner.objectSpawned += OnObjectSpawned;
-            }
-        }
-
-        public IEnumerator TurnOnPlanes(bool visualize)
-        {
-            yield return new WaitForSeconds(1f);
-
-            if (m_FeatureController != null)
-            {
-                m_FeatureController.TogglePlaneVisualization(visualize);
-                m_FeatureController.TogglePlanes(true);
-            }
-        }
-
-        IEnumerator TurnOnARFeatures()
-        {
-            if (m_FeatureController == null)
-                yield return null;
-
-            yield return new WaitForSeconds(0.5f);
-
-            // We are checking the bounding box count here so that we disable plane visuals so there is no
-            // visual Z fighting. If the user has not defined any furniture in space setup or the platform
-            // does not support bounding boxes, we want to enable plane visuals, but disable bounding box visuals.
-            m_FeatureController.ToggleBoundingBoxes(true);
-            m_FeatureController.TogglePlanes(true);
-
-            // Quick hack for for async await race condition.
-            // TODO: -- Probably better to listen to trackable change events in the ARFeatureController and update accordingly there
-            yield return new WaitForSeconds(0.5f);
-            m_FeatureController.ToggleDebugInfo(false);
-
-            // If there are bounding boxes, we want to hide the planes so they don't cause z-fighting.
-            if (m_FeatureController.HasBoundingBoxes())
-            {
-                m_FeatureController.TogglePlaneVisualization(false);
-                m_FeatureController.ToggleBoundingBoxVisualization(true);
-            }
-            else
-            {
-                m_FeatureController.ToggleBoundingBoxVisualization(true);
-            }
-
-            m_FeatureController.occlusionManager.SetupManager();
-        }
-
-        void TurnOffARFeatureVisualization()
-        {
-            if (m_FeatureController == null)
+            if (!m_AddActionButtonsToCoachingMenu || m_SkipButton == null)
                 return;
 
-            m_FeatureController.TogglePlaneVisualization(false);
-            m_FeatureController.ToggleBoundingBoxVisualization(false);
+            var template = m_SkipButton;
+            var parent = template.transform.parent;
+            if (parent == null)
+                return;
+
+            var calibrateExisting = parent.Find(m_CalibrateButtonName);
+            if (calibrateExisting == null)
+            {
+                m_CalibrateButtonObject = Instantiate(template, parent);
+                m_CalibrateButtonObject.name = m_CalibrateButtonName;
+            }
+            else
+            {
+                m_CalibrateButtonObject = calibrateExisting.gameObject;
+            }
+
+            var surfaceExisting = parent.Find(m_CreateSurfaceButtonName);
+            if (surfaceExisting == null)
+            {
+                m_CreateSurfaceButtonObject = Instantiate(template, parent);
+                m_CreateSurfaceButtonObject.name = m_CreateSurfaceButtonName;
+            }
+            else
+            {
+                m_CreateSurfaceButtonObject = surfaceExisting.gameObject;
+            }
+
+            BindActionButton(
+                m_CalibrateButtonObject,
+                out m_CalibrateButton,
+                out m_CalibrateButtonLabel,
+                OnCalibrateSyringeButtonClicked);
+
+            BindActionButton(
+                m_CreateSurfaceButtonObject,
+                out m_CreateSurfaceButton,
+                out m_CreateSurfaceButtonLabel,
+                OnCreateSurfaceButtonClicked);
+
+            var baseIndex = template.transform.GetSiblingIndex();
+            m_CalibrateButtonObject.transform.SetSiblingIndex(Mathf.Min(baseIndex + 1, parent.childCount - 1));
+            m_CreateSurfaceButtonObject.transform.SetSiblingIndex(Mathf.Min(baseIndex + 2, parent.childCount - 1));
+
+            OffsetActionButtonFromTemplate(template, m_CalibrateButtonObject, 1);
+            OffsetActionButtonFromTemplate(template, m_CreateSurfaceButtonObject, 2);
         }
 
-        void DisableTooltips()
+        static void BindActionButton(
+            GameObject buttonObject,
+            out Button button,
+            out TextMeshProUGUI label,
+            UnityEngine.Events.UnityAction onClick)
         {
-            if (m_CurrentGoal.CurrentGoal == OnboardingGoals.TapSurface)
+            button = null;
+            label = null;
+
+            if (buttonObject == null)
+                return;
+
+            button = buttonObject.GetComponentInChildren<Button>(true);
+            if (button != null)
             {
-                if (m_TapTooltip != null)
+                button.onClick = new Button.ButtonClickedEvent();
+                button.onClick.AddListener(onClick);
+            }
+
+            label = buttonObject.GetComponentInChildren<TextMeshProUGUI>(true);
+        }
+
+        void OffsetActionButtonFromTemplate(GameObject template, GameObject actionButton, int slot)
+        {
+            if (template == null || actionButton == null)
+                return;
+
+            if (!template.TryGetComponent<RectTransform>(out var templateRect) ||
+                !actionButton.TryGetComponent<RectTransform>(out var actionRect))
+                return;
+
+            var basePos = templateRect.anchoredPosition;
+            var verticalStep = Mathf.Max(templateRect.rect.height, 40f) + m_ActionButtonVerticalSpacing;
+            actionRect.anchoredPosition = new Vector2(basePos.x, basePos.y - (verticalStep * slot));
+        }
+
+        void OnCalibrateSyringeButtonClicked()
+        {
+            if (m_Tracker == null)
+                return;
+
+            if (m_InjectionTutorial != null &&
+                m_InjectionTutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.Start)
+            {
+                m_InjectionTutorial.AdvanceStep();
+            }
+
+            if (m_Tracker.isCalibratingMarker)
+            {
+                m_Tracker.CancelMarkerCalibration();
+            }
+            else
+            {
+                if (m_Tracker.isMarkerCalibrated)
+                    m_Tracker.ResetMarkerCalibration();
+
+                m_Tracker.StartMarkerCalibration();
+            }
+
+            RefreshActionButtons(force: true);
+            SyncTutorialToUI(force: true);
+        }
+
+        void OnCreateSurfaceButtonClicked()
+        {
+            if (m_SurfaceSelectionTool == null)
+                return;
+
+            if (m_SurfaceSelectionTool.isSelectingSurface)
+                m_SurfaceSelectionTool.CancelSurfaceSelection();
+            else
+                m_SurfaceSelectionTool.BeginSurfaceSelection();
+
+            RefreshActionButtons(force: true);
+        }
+
+        void RefreshActionButtons(bool force)
+        {
+            if (!m_AddActionButtonsToCoachingMenu)
+                return;
+
+            if (m_CalibrateButtonLabel != null)
+            {
+                var text = BuildCalibrateButtonLabel();
+                if (force || !string.Equals(text, m_LastCalibrateButtonText, StringComparison.Ordinal))
                 {
-                    m_TapTooltip.SetActive(false);
+                    m_CalibrateButtonLabel.text = text;
+                    m_LastCalibrateButtonText = text;
                 }
             }
+
+            if (m_CreateSurfaceButtonLabel != null)
+            {
+                var text = BuildCreateSurfaceButtonLabel();
+                if (force || !string.Equals(text, m_LastCreateSurfaceButtonText, StringComparison.Ordinal))
+                {
+                    m_CreateSurfaceButtonLabel.text = text;
+                    m_LastCreateSurfaceButtonText = text;
+                }
+            }
+        }
+
+        string BuildCalibrateButtonLabel()
+        {
+            if (m_Tracker == null)
+                return m_CalibrateIdleLabel;
+
+            if (m_Tracker.isCalibratingMarker)
+                return $"{m_CalibratingLabelPrefix} ({m_Tracker.calibrationTapCount}/{m_Tracker.requiredCalibrationTaps})";
+
+            if (m_Tracker.isMarkerCalibrated)
+                return m_CalibratedLabel;
+
+            return m_CalibrateIdleLabel;
+        }
+
+        string BuildCreateSurfaceButtonLabel()
+        {
+            if (m_SurfaceSelectionTool == null)
+                return m_CreateSurfaceIdleLabel;
+
+            if (m_SurfaceSelectionTool.isSelectingSurface)
+                return m_CreateSurfaceSelectingLabel;
+
+            if (m_SurfaceSelectionTool.hasPlacedSurface)
+                return m_CreateSurfacePlacedLabel;
+
+            return m_CreateSurfaceIdleLabel;
+        }
+
+        void SyncTutorialToUI(bool force)
+        {
+            if (m_InjectionTutorial == null)
+                return;
+
+            var step = m_InjectionTutorial.currentStep;
+            var finished = m_InjectionTutorial.isFinished;
+            var score = m_InjectionTutorial.finalScore;
+
+            if (!force && step == m_LastDisplayedStep && finished == m_LastFinishedState && Mathf.Approximately(score, m_LastScore))
+                return;
+
+            m_LastDisplayedStep = step;
+            m_LastFinishedState = finished;
+            m_LastScore = score;
+
+            var stepIndex = GetFlowIndex(step);
+            var stepTitle = GetFlowTitle(step, stepIndex);
+            var stepBody = BuildFlowDescription(step);
+
+            var activePanelIndex = UpdateStepPanels(stepIndex);
+
+            if (m_SyncCoachingText)
+            {
+                if (m_CoachingTitleText != null)
+                    m_CoachingTitleText.text = stepTitle;
+
+                if (m_CoachingBodyText != null)
+                    m_CoachingBodyText.text = stepBody;
+
+                ApplyTextToActiveStepPanel(activePanelIndex, stepTitle, stepBody);
+            }
+
+            if (m_StepButtonTextField != null)
+                m_StepButtonTextField.text = GetActionButtonLabel(step, finished, score);
+
+            if (m_SkipButton != null)
+                m_SkipButton.SetActive(!finished);
+
+            if (m_GoalPanelLazyFollow != null)
+                m_GoalPanelLazyFollow.positionFollowMode = LazyFollow.PositionFollowMode.Follow;
+
+            if (m_PassthroughToggle != null)
+                m_PassthroughToggle.SetIsOnWithoutNotify(true);
+
+            if (m_FadeMaterial != null)
+                m_FadeMaterial.FadeSkybox(true);
+        }
+
+        int UpdateStepPanels(int stepIndex)
+        {
+            if (m_StepList.Count == 0)
+                return -1;
+
+            var panelIndex = Mathf.Clamp(stepIndex, 0, m_StepList.Count - 1);
+            for (var i = 0; i < m_StepList.Count; i++)
+            {
+                var panel = m_StepList[i].stepObject;
+                if (panel != null)
+                    panel.SetActive(i == panelIndex);
+            }
+
+            return panelIndex;
+        }
+
+        void ApplyTextToActiveStepPanel(int panelIndex, string title, string body)
+        {
+            if (panelIndex < 0 || panelIndex >= m_StepList.Count)
+                return;
+
+            var panel = m_StepList[panelIndex].stepObject;
+            if (panel == null)
+                return;
+
+            var texts = panel.GetComponentsInChildren<TextMeshProUGUI>(true);
+            TextMeshProUGUI first = null;
+            TextMeshProUGUI second = null;
+
+            for (var i = 0; i < texts.Length; i++)
+            {
+                if (texts[i] == null || texts[i] == m_StepButtonTextField)
+                    continue;
+
+                if (first == null)
+                {
+                    first = texts[i];
+                    continue;
+                }
+
+                second = texts[i];
+                break;
+            }
+
+            if (first != null)
+                first.text = title;
+
+            if (second != null)
+                second.text = body;
+        }
+
+        int GetFlowIndex(SyringeCalibrationButtonBridge.TutorialStep step)
+        {
+            return step switch
+            {
+                SyringeCalibrationButtonBridge.TutorialStep.Start => 0,
+                SyringeCalibrationButtonBridge.TutorialStep.Calibration => 1,
+                SyringeCalibrationButtonBridge.TutorialStep.InjectionType => 2,
+                SyringeCalibrationButtonBridge.TutorialStep.FillSyringe => 3,
+                SyringeCalibrationButtonBridge.TutorialStep.BubbleCheckManual => 4,
+                SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle => 5,
+                SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate => 6,
+                SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed => 7,
+                SyringeCalibrationButtonBridge.TutorialStep.FinalScore => 8,
+                _ => 0,
+            };
+        }
+
+        string GetFlowTitle(SyringeCalibrationButtonBridge.TutorialStep step, int stepIndex)
+        {
+            var label = step switch
+            {
+                SyringeCalibrationButtonBridge.TutorialStep.Start => "Start",
+                SyringeCalibrationButtonBridge.TutorialStep.Calibration => "Calibration",
+                SyringeCalibrationButtonBridge.TutorialStep.InjectionType => "Injection Type",
+                SyringeCalibrationButtonBridge.TutorialStep.FillSyringe => "Fill Syringe",
+                SyringeCalibrationButtonBridge.TutorialStep.BubbleCheckManual => "Bubble Check",
+                SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle => "Injection Angle",
+                SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate => "Insertion + Flow Rate",
+                SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed => "Remove Speed",
+                SyringeCalibrationButtonBridge.TutorialStep.FinalScore => "Final Score",
+                _ => "Injection Flow",
+            };
+
+            return $"Step {stepIndex + 1}/9 - {label}";
+        }
+
+        string BuildFlowDescription(SyringeCalibrationButtonBridge.TutorialStep step)
+        {
+            switch (step)
+            {
+                case SyringeCalibrationButtonBridge.TutorialStep.Start:
+                    return "Initialize the injection tutorial and prepare hand tracking.";
+
+                case SyringeCalibrationButtonBridge.TutorialStep.Calibration:
+                    if (m_Tracker != null && m_Tracker.isCalibratingMarker)
+                        return $"Calibrating syringe marker ({m_Tracker.calibrationTapCount}/{m_Tracker.requiredCalibrationTaps}).";
+
+                    if (m_Tracker != null && m_Tracker.isMarkerCalibrated)
+                        return "Syringe marker calibration complete.";
+
+                    return "Calibrate syringe with hand overlay and marker calibration.";
+
+                case SyringeCalibrationButtonBridge.TutorialStep.InjectionType:
+                    return "Select the injection type (IM, SC, ID, or IV).";
+
+                case SyringeCalibrationButtonBridge.TutorialStep.FillSyringe:
+                    return $"Fill syringe and track amount: {(m_InjectionTutorial.fillAmountNormalized * 100f):F0}%";
+
+                case SyringeCalibrationButtonBridge.TutorialStep.BubbleCheckManual:
+                    return "Perform manual bubble check before injection.";
+
+                case SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle:
+                    return "Align and hold the injection angle target.";
+
+                case SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate:
+                    return "Maintain insertion speed and flow rate targets.";
+
+                case SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed:
+                    return "Remove syringe at controlled speed.";
+
+                case SyringeCalibrationButtonBridge.TutorialStep.FinalScore:
+                    return $"Tutorial complete. Final score: {m_InjectionTutorial.finalScore:F1}/100";
+
+                default:
+                    return string.Empty;
+            }
+        }
+
+        string GetActionButtonLabel(SyringeCalibrationButtonBridge.TutorialStep step, bool finished, float score)
+        {
+            if (finished || step == SyringeCalibrationButtonBridge.TutorialStep.FinalScore)
+                return $"Score {score:F1}/100";
+
+            return step switch
+            {
+                SyringeCalibrationButtonBridge.TutorialStep.Start => "Begin",
+                SyringeCalibrationButtonBridge.TutorialStep.Calibration => "Calibrating...",
+                SyringeCalibrationButtonBridge.TutorialStep.InjectionType => "Select Type",
+                SyringeCalibrationButtonBridge.TutorialStep.FillSyringe => "Filling...",
+                SyringeCalibrationButtonBridge.TutorialStep.BubbleCheckManual => "Bubble Check",
+                SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle => "Hold Angle",
+                SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate => "Speed + Flow",
+                SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed => "Remove",
+                _ => "Continue",
+            };
         }
 
         public void ForceCompleteGoal()
         {
-            CompleteGoal();
+            if (m_InjectionTutorial == null)
+                return;
+
+            if (m_InjectionTutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.BubbleCheckManual)
+                m_InjectionTutorial.MarkBubbleCheckCompleted();
+
+            m_InjectionTutorial.AdvanceStep();
+            SyncTutorialToUI(force: true);
         }
 
         public void ForceEndAllGoals()
         {
-            m_CoachingUIParent.transform.localScale = Vector3.zero;
+            if (m_InjectionTutorial == null)
+                return;
 
-            TurnOnVideoPlayer();
-
-            if (m_VideoPlayerToggle != null)
-                m_VideoPlayerToggle.isOn = true;
-
-            if (m_FeatureController != null)
-                m_FeatureController.TogglePassthrough(true);
-
-            if (m_LearnButton != null)
+            var guard = 0;
+            while (!m_InjectionTutorial.isFinished && guard < 16)
             {
-                m_LearnButton.SetActive(false);
+                m_InjectionTutorial.AdvanceStep();
+                guard++;
             }
 
-            if (m_LearnModal != null)
-            {
-                m_LearnModal.transform.localScale = Vector3.zero;
-            }
-
-            StartCoroutine(TurnOnARFeatures());
+            SyncTutorialToUI(force: true);
         }
 
         public void ResetCoaching()
         {
-            TurnOffARFeatureVisualization();
-            m_CoachingUIParent.transform.localScale = Vector3.one;
+            if (m_InjectionTutorial != null)
+                m_InjectionTutorial.BeginTutorial();
 
-            m_OnboardingGoals.Clear();
-            m_OnboardingGoals = new Queue<Goal>();
-            var welcomeGoal = new Goal(OnboardingGoals.Empty);
-            var findSurfaceGoal = new Goal(OnboardingGoals.FindSurfaces);
-            var tapSurfaceGoal = new Goal(OnboardingGoals.TapSurface);
-            var endGoal = new Goal(OnboardingGoals.Empty);
-
-            m_OnboardingGoals.Enqueue(welcomeGoal);
-            m_OnboardingGoals.Enqueue(findSurfaceGoal);
-            m_OnboardingGoals.Enqueue(tapSurfaceGoal);
-            m_OnboardingGoals.Enqueue(endGoal);
-
-            for (int i = 0; i < m_StepList.Count; i++)
-            {
-                if (i == 0)
-                {
-                    m_StepList[i].stepObject.SetActive(true);
-                    m_SkipButton.SetActive(m_StepList[i].includeSkipButton);
-                    m_StepButtonTextField.text = m_StepList[i].buttonText;
-                }
-                else
-                {
-                    m_StepList[i].stepObject.SetActive(false);
-                }
-            }
-
-            m_CurrentGoal = m_OnboardingGoals.Dequeue();
-            m_AllGoalsFinished = false;
-
-            if (m_TapTooltip != null)
-                m_TapTooltip.SetActive(false);
-
-            if (m_LearnButton != null)
-            {
-                m_LearnButton.SetActive(false);
-            }
+            if (m_CoachingUIParent != null)
+                m_CoachingUIParent.transform.localScale = Vector3.one;
 
             if (m_LearnModal != null)
-            {
                 m_LearnModal.transform.localScale = Vector3.zero;
-            }
 
-            m_CurrentGoalIndex = 0;
-        }
+            if (m_VideoPlayer != null)
+                m_VideoPlayer.SetActive(false);
 
-        void OnObjectSpawned(GameObject spawnedObject)
-        {
-            m_SurfacesTapped++;
-            if (m_CurrentGoal.CurrentGoal == OnboardingGoals.TapSurface && m_SurfacesTapped >= k_NumberOfSurfacesTappedToCompleteGoal)
-            {
-                CompleteGoal();
-                m_GoalPanelLazyFollow.positionFollowMode = LazyFollow.PositionFollowMode.Follow;
-            }
+            if (m_VideoPlayerToggle != null)
+                m_VideoPlayerToggle.isOn = false;
+
+            SyncTutorialToUI(force: true);
         }
 
         public void TooglePlayer(bool visibility)
         {
             if (visibility)
-            {
                 TurnOnVideoPlayer();
-            }
-            else
-            {
-                if (m_VideoPlayer.activeSelf)
-                {
-                    m_VideoPlayer.SetActive(false);
-                    if (m_VideoPlayerToggle.isOn)
-                        m_VideoPlayerToggle.isOn = false;
-                }
-            }
+            else if (m_VideoPlayer != null && m_VideoPlayer.activeSelf)
+                m_VideoPlayer.SetActive(false);
         }
 
         void TurnOnVideoPlayer()
         {
-            if (m_VideoPlayer.activeSelf)
+            if (m_VideoPlayer == null || m_VideoPlayer.activeSelf)
                 return;
 
             var follow = m_VideoPlayer.GetComponent<LazyFollow>();
             if (follow != null)
                 follow.rotationFollowMode = LazyFollow.RotationFollowMode.None;
 
-            m_VideoPlayer.SetActive(false);
-            var target = Camera.main.transform;
-            var targetRotation = target.rotation;
-            var newTransform = target;
-            var targetEuler = targetRotation.eulerAngles;
-            targetRotation = Quaternion.Euler
-            (
-                0f,
-                targetEuler.y,
-                targetEuler.z
-            );
+            var target = Camera.main != null ? Camera.main.transform : null;
+            if (target == null)
+            {
+                m_VideoPlayer.SetActive(true);
+                return;
+            }
 
-            newTransform.rotation = targetRotation;
-            var targetPosition = target.position + newTransform.TransformVector(m_TargetOffset);
+            var targetRotation = target.rotation;
+            var targetEuler = targetRotation.eulerAngles;
+            targetRotation = Quaternion.Euler(0f, targetEuler.y, targetEuler.z);
+
+            target.rotation = targetRotation;
+            var targetPosition = target.position + target.TransformVector(m_TargetOffset);
             m_VideoPlayer.transform.position = targetPosition;
 
             var forward = target.position - m_VideoPlayer.transform.position;
-            var targetPlayerRotation = forward.sqrMagnitude > float.Epsilon ? Quaternion.LookRotation(forward, Vector3.up) : Quaternion.identity;
+            var targetPlayerRotation = forward.sqrMagnitude > float.Epsilon
+                ? Quaternion.LookRotation(forward, Vector3.up)
+                : Quaternion.identity;
+
             targetPlayerRotation *= Quaternion.Euler(new Vector3(0f, 180f, 0f));
             var targetPlayerEuler = targetPlayerRotation.eulerAngles;
             var currentEuler = m_VideoPlayer.transform.rotation.eulerAngles;
-            targetPlayerRotation = Quaternion.Euler
-            (
-                currentEuler.x,
-                targetPlayerEuler.y,
-                currentEuler.z
-            );
+            targetPlayerRotation = Quaternion.Euler(currentEuler.x, targetPlayerEuler.y, currentEuler.z);
 
             m_VideoPlayer.transform.rotation = targetPlayerRotation;
             m_VideoPlayer.SetActive(true);
+
             if (follow != null)
                 follow.rotationFollowMode = LazyFollow.RotationFollowMode.LookAtWithWorldUp;
+        }
+
+        // Legacy names kept to avoid broken serialized callbacks.
+        void CompleteGoal() => ForceCompleteGoal();
+        void ProcessGoals() => SyncTutorialToUI(force: false);
+        void DisableTooltips()
+        {
+            if (m_TapTooltip != null)
+                m_TapTooltip.SetActive(false);
+        }
+
+        IEnumerator TurnOnPlanes(bool _)
+        {
+            yield break;
+        }
+
+        IEnumerator TurnOnARFeatures()
+        {
+            yield break;
+        }
+
+        void TurnOffARFeatureVisualization()
+        {
+        }
+
+        void OnObjectSpawned(GameObject _)
+        {
+            ForceCompleteGoal();
         }
     }
 }
