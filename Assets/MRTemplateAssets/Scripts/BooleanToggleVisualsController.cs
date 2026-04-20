@@ -56,6 +56,9 @@ namespace UnityEngine.XR.Templates.MR
 
         void ToggleValueChanged(bool value)
         {
+            if (m_Knob == null)
+                return;
+
             if (value)
             {
                 m_Knob.localPosition = new Vector3(k_TargetPositionX, m_Knob.localPosition.y, m_Knob.localPosition.z);

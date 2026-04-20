@@ -1,6 +1,23 @@
 namespace UnityEngine.XR.Templates.MR
 {
     /// <summary>
+    /// Per-category scores that sum to <see cref="ScoreBreakdown.total"/> (before display rounding).
+    /// </summary>
+    [System.Serializable]
+    public struct ScoreBreakdown
+    {
+        public float calibration;
+        public float injectionType;
+        public float fill;
+        public float bubble;
+        public float angle;
+        public float insertion;
+        public float flow;
+        public float removal;
+        public float total;
+    }
+
+    /// <summary>
     /// Disables the MR template wrist menu and runs a stubbed injection tutorial flow.
     /// </summary>
     public class SyringeCalibrationButtonBridge : MonoBehaviour
@@ -29,7 +46,8 @@ namespace UnityEngine.XR.Templates.MR
 
         [Header("Wrist menu removal")]
         [SerializeField]
-        bool m_DisableWristMenu;
+        [Tooltip("When true, the MR template wrist menu root is disabled at startup (default matches previous always-on behavior).")]
+        bool m_DisableWristMenu = true;
 
         [SerializeField]
         string m_WristMenuRootPath = "UI/Hand Menu Setup MR Template Variant";
@@ -116,6 +134,9 @@ namespace UnityEngine.XR.Templates.MR
         float m_FinalScore;
 
         [SerializeField]
+        ScoreBreakdown m_LastScoreBreakdown;
+
+        [SerializeField]
         float m_StepElapsedSeconds;
 
         float m_AngleHoldProgress;
@@ -127,17 +148,58 @@ namespace UnityEngine.XR.Templates.MR
         public TutorialStep currentStep => m_CurrentStep;
         public bool isTutorialRunning => m_IsTutorialRunning;
         public bool isFinished => m_IsFinished;
+        public InjectionType selectedInjectionType => m_SelectedInjectionType;
         public float fillAmountNormalized => m_FillAmountNormalized;
         public float finalScore => m_FinalScore;
+        public ScoreBreakdown lastScoreBreakdown => m_LastScoreBreakdown;
+
+        public float injectionAngleDegrees => m_InjectionAngleDegrees;
+        public float insertionSpeedCmPerSec => m_InsertionSpeedCmPerSec;
+        public float flowRateMlPerSec => m_FlowRateMlPerSec;
+        public float removalSpeedCmPerSec => m_RemovalSpeedCmPerSec;
+        public bool bubbleCheckCompleted => m_BubbleCheckCompleted;
+
+        public float angleHoldProgressNormalized =>
+            m_AngleHoldSeconds > 0.01f ? Mathf.Clamp01(m_AngleHoldProgress / m_AngleHoldSeconds) : 0f;
+
+        public float insertionFlowHoldProgressNormalized =>
+            m_SpeedHoldSeconds > 0.01f ? Mathf.Clamp01(m_InsertionHoldProgress / m_SpeedHoldSeconds) : 0f;
+
+        public float removalHoldProgressNormalized =>
+            m_SpeedHoldSeconds > 0.01f ? Mathf.Clamp01(m_RemovalHoldProgress / m_SpeedHoldSeconds) : 0f;
+
+        public Vector2 targetInjectionAngleRange => m_TargetInjectionAngleRange;
+        public float targetInsertionSpeedCmPerSec => m_TargetInsertionSpeedCmPerSec;
+        public float targetFlowRateMlPerSec => m_TargetFlowRateMlPerSec;
+        public float targetRemovalSpeedCmPerSec => m_TargetRemovalSpeedCmPerSec;
+        public float targetFillAmountNormalized => m_TargetFillAmount;
+
+        /// <summary>
+        /// Multi-line summary for the final score coaching panel (category points + total).
+        /// </summary>
+        public string GetScoreBreakdownDisplayString()
+        {
+            var s = m_LastScoreBreakdown;
+            return
+                "Calibration: " + s.calibration.ToString("F1") + "\n" +
+                "Injection type: " + s.injectionType.ToString("F1") + "\n" +
+                "Fill: " + s.fill.ToString("F1") + "\n" +
+                "Bubble check: " + s.bubble.ToString("F1") + "\n" +
+                "Angle: " + s.angle.ToString("F1") + "\n" +
+                "Insertion: " + s.insertion.ToString("F1") + "\n" +
+                "Flow rate: " + s.flow.ToString("F1") + "\n" +
+                "Removal: " + s.removal.ToString("F1") + "\n" +
+                "---\n" +
+                "Total: " + s.total.ToString("F1") + " / 100";
+        }
 
         void Start()
         {
             ResolveReferences();
 
+            // Wrist UI is optionally hidden while using the floating coaching UI.
             if (m_DisableWristMenu)
                 DisableWristMenu();
-            else
-                EnableWristMenu();
 
             BeginTutorial();
         }
@@ -169,6 +231,7 @@ namespace UnityEngine.XR.Templates.MR
             m_FlowRateMlPerSec = 0f;
             m_RemovalSpeedCmPerSec = 0f;
             m_HasPreviousNeedleTip = false;
+            m_LastScoreBreakdown = default;
 
             GoToStep(TutorialStep.Start);
         }
@@ -176,6 +239,21 @@ namespace UnityEngine.XR.Templates.MR
         public void SetInjectionType(InjectionType type)
         {
             m_SelectedInjectionType = type;
+        }
+
+        public void CycleInjectionType()
+        {
+            var nextType = m_SelectedInjectionType switch
+            {
+                InjectionType.None => InjectionType.Intramuscular,
+                InjectionType.Intramuscular => InjectionType.Subcutaneous,
+                InjectionType.Subcutaneous => InjectionType.Intradermal,
+                InjectionType.Intradermal => InjectionType.Intravenous,
+                InjectionType.Intravenous => InjectionType.Intramuscular,
+                _ => InjectionType.Intramuscular,
+            };
+
+            SetInjectionType(nextType);
         }
 
         public void SetFillAmount(float normalizedAmount)
@@ -190,15 +268,18 @@ namespace UnityEngine.XR.Templates.MR
 
         public void AdvanceStep()
         {
+            if (m_IsFinished)
+                return;
+
             switch (m_CurrentStep)
             {
                 case TutorialStep.Start:
-                    GoToStep(TutorialStep.Calibration);
-                    break;
-                case TutorialStep.Calibration:
                     GoToStep(TutorialStep.InjectionType);
                     break;
                 case TutorialStep.InjectionType:
+                    GoToStep(TutorialStep.Calibration);
+                    break;
+                case TutorialStep.Calibration:
                     GoToStep(TutorialStep.FillSyringe);
                     break;
                 case TutorialStep.FillSyringe:
@@ -217,6 +298,48 @@ namespace UnityEngine.XR.Templates.MR
                     GoToStep(TutorialStep.FinalScore);
                     break;
             }
+        }
+
+        public void PreviousStep()
+        {
+            if (m_CurrentStep == TutorialStep.Start)
+                return;
+
+            if (m_IsFinished)
+            {
+                m_IsFinished = false;
+                m_IsTutorialRunning = true;
+            }
+
+            switch (m_CurrentStep)
+            {
+                case TutorialStep.InjectionType:
+                    GoToStep(TutorialStep.Start);
+                    break;
+                case TutorialStep.Calibration:
+                    GoToStep(TutorialStep.InjectionType);
+                    break;
+                case TutorialStep.FillSyringe:
+                    GoToStep(TutorialStep.Calibration);
+                    break;
+                case TutorialStep.BubbleCheckManual:
+                    GoToStep(TutorialStep.FillSyringe);
+                    break;
+                case TutorialStep.InjectionAngle:
+                    GoToStep(TutorialStep.BubbleCheckManual);
+                    break;
+                case TutorialStep.InsertionSpeedFlowRate:
+                    GoToStep(TutorialStep.InjectionAngle);
+                    break;
+                case TutorialStep.RemoveSpeed:
+                    GoToStep(TutorialStep.InsertionSpeedFlowRate);
+                    break;
+                case TutorialStep.FinalScore:
+                    GoToStep(TutorialStep.RemoveSpeed);
+                    break;
+            }
+
+            m_HasPreviousNeedleTip = false;
         }
 
         void ResolveReferences()
@@ -271,7 +394,7 @@ namespace UnityEngine.XR.Templates.MR
                     TickRemovalSpeedStep();
                     break;
                 case TutorialStep.FinalScore:
-                    FinalizeScore();
+                    // FinalizeScore runs once from GoToStep(FinalScore); avoid re-running every frame.
                     break;
             }
         }
@@ -279,25 +402,20 @@ namespace UnityEngine.XR.Templates.MR
         void TickStartStep()
         {
             if (m_AutoAdvanceStub && m_StepElapsedSeconds >= m_IntroDelaySeconds)
-                GoToStep(TutorialStep.Calibration);
+                GoToStep(TutorialStep.InjectionType);
         }
 
         void TickCalibrationStep()
         {
-            if (m_Tracker != null)
+            if (m_Tracker != null &&
+                m_AutoAdvanceStub &&
+                !m_Tracker.isMarkerCalibrated &&
+                !m_Tracker.isCalibratingMarker)
             {
-                if (m_AutoAdvanceStub && !m_Tracker.isMarkerCalibrated && !m_Tracker.isCalibratingMarker)
-                    m_Tracker.StartMarkerCalibration();
-
-                if (m_Tracker.isMarkerCalibrated)
-                {
-                    GoToStep(TutorialStep.InjectionType);
-                    return;
-                }
+                m_Tracker.StartMarkerCalibration();
             }
 
-            if (m_AutoAdvanceStub && m_StepElapsedSeconds > 6f)
-                GoToStep(TutorialStep.InjectionType);
+            // Stay on Calibration until the user taps Next — surface + syringe are both available from the action bar.
         }
 
         void TickInjectionTypeStep()
@@ -309,8 +427,7 @@ namespace UnityEngine.XR.Templates.MR
                 m_SelectedInjectionType = m_DefaultInjectionType;
             }
 
-            if (m_SelectedInjectionType != InjectionType.None)
-                GoToStep(TutorialStep.FillSyringe);
+            // Do not auto-advance when a type is chosen — use Next / AdvanceStep so the user stays on this screen.
         }
 
         void TickFillSyringeStep()
@@ -426,6 +543,9 @@ namespace UnityEngine.XR.Templates.MR
 
         void FinalizeScore()
         {
+            if (m_IsFinished)
+                return;
+
             var calibrationScore = (m_Tracker == null || m_Tracker.isMarkerCalibrated) ? 20f : 12f;
             var typeScore = m_SelectedInjectionType == InjectionType.None ? 0f : 10f;
             var fillScore = Mathf.Clamp01(1f - Mathf.Abs(m_FillAmountNormalized - m_TargetFillAmount)) * 15f;
@@ -436,17 +556,21 @@ namespace UnityEngine.XR.Templates.MR
             var flowScore = Mathf.Clamp01(1f - Mathf.Abs(m_FlowRateMlPerSec - m_TargetFlowRateMlPerSec) / 0.7f) * 7f;
             var removeScore = Mathf.Clamp01(1f - Mathf.Abs(m_RemovalSpeedCmPerSec - m_TargetRemovalSpeedCmPerSec) / 4f) * 15f;
 
-            m_FinalScore = Mathf.Clamp(
-                calibrationScore +
-                typeScore +
-                fillScore +
-                bubbleScore +
-                angleScore +
-                insertionScore +
-                flowScore +
-                removeScore,
-                0f,
-                100f);
+            var sum = calibrationScore + typeScore + fillScore + bubbleScore + angleScore + insertionScore + flowScore + removeScore;
+            m_FinalScore = Mathf.Clamp(sum, 0f, 100f);
+
+            m_LastScoreBreakdown = new ScoreBreakdown
+            {
+                calibration = calibrationScore,
+                injectionType = typeScore,
+                fill = fillScore,
+                bubble = bubbleScore,
+                angle = angleScore,
+                insertion = insertionScore,
+                flow = flowScore,
+                removal = removeScore,
+                total = m_FinalScore,
+            };
 
             m_IsFinished = true;
             m_IsTutorialRunning = false;

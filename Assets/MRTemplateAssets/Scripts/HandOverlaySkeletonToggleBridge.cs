@@ -17,6 +17,14 @@ namespace UnityEngine.XR.Templates.MR
         bool m_ForceDisableHandRemoval = true;
 
         [SerializeField]
+        [Tooltip("Optional. Assign the hand-menu skeleton toggle here to avoid fragile path-based lookup.")]
+        Toggle m_HandMenuToggleReference;
+
+        [SerializeField]
+        [Tooltip("Optional. Label next to the toggle; if unset, m_HandMenuLabelPath is used.")]
+        TextMeshProUGUI m_HandMenuLabelReference;
+
+        [SerializeField]
         string m_HandMenuTogglePath =
             "UI/Hand Menu Setup MR Template Variant/Follow GameObject/Spatial Panel Scroll/Main Menu/Occlusion Tab/Quest Settings/List Item Boolean Toggle/Offset Anchor/Boolean Toggle";
 
@@ -30,6 +38,9 @@ namespace UnityEngine.XR.Templates.MR
         Toggle m_Toggle;
         Component m_HandVisualizer;
         OcclusionManager m_OcclusionManager;
+        bool m_IsSkeletonVisible;
+
+        public bool isSkeletonVisible => m_IsSkeletonVisible;
 
         void Start()
         {
@@ -60,9 +71,14 @@ namespace UnityEngine.XR.Templates.MR
 
             if (m_Toggle == null)
             {
-                var toggleObject = GameObject.Find(m_HandMenuTogglePath);
-                if (toggleObject != null)
-                    m_Toggle = toggleObject.GetComponent<Toggle>();
+                if (m_HandMenuToggleReference != null)
+                    m_Toggle = m_HandMenuToggleReference;
+                else
+                {
+                    var toggleObject = GameObject.Find(m_HandMenuTogglePath);
+                    if (toggleObject != null)
+                        m_Toggle = toggleObject.GetComponent<Toggle>();
+                }
             }
         }
 
@@ -81,6 +97,12 @@ namespace UnityEngine.XR.Templates.MR
 
         void ApplyLabelText()
         {
+            if (m_HandMenuLabelReference != null)
+            {
+                m_HandMenuLabelReference.text = "Toggle Skeleton";
+                return;
+            }
+
             var labelObject = GameObject.Find(m_HandMenuLabelPath);
             if (labelObject == null)
                 return;
@@ -95,8 +117,23 @@ namespace UnityEngine.XR.Templates.MR
             StartCoroutine(ApplyDeferredOcclusionDisable());
         }
 
+        public void ToggleSkeleton()
+        {
+            SetSkeletonVisible(!m_IsSkeletonVisible);
+        }
+
+        public void SetSkeletonVisible(bool showSkeleton)
+        {
+            if (m_Toggle != null)
+                m_Toggle.SetIsOnWithoutNotify(showSkeleton);
+
+            ApplyState(showSkeleton);
+            StartCoroutine(ApplyDeferredOcclusionDisable());
+        }
+
         void ApplyState(bool showSkeleton)
         {
+            m_IsSkeletonVisible = showSkeleton;
             SetVisualizerBool("drawMeshes", false);
             SetVisualizerBool("debugDrawJoints", showSkeleton);
 

@@ -7,7 +7,7 @@ using UnityEngine.Video;
 namespace UnityEngine.XR.Templates.MR
 {
     /// <summary>
-    /// Connects a UI slider control to a video player, allowing users to scrub to a particular time in th video.
+    /// Connects a UI slider control to a video player, allowing users to scrub to a particular time in the video.
     /// </summary>
     [RequireComponent(typeof(VideoPlayer))]
     public class VideoTimeScrubControl : MonoBehaviour
@@ -45,10 +45,14 @@ namespace UnityEngine.XR.Templates.MR
         bool m_VideoJumpPending;
         long m_LastFrameBeforeScrub;
         VideoPlayer m_VideoPlayer;
+        Coroutine m_HideSliderCoroutine;
 
         void Start()
         {
             m_VideoPlayer = GetComponent<VideoPlayer>();
+            if (m_VideoPlayer == null)
+                return;
+
             if (!m_VideoPlayer.playOnAwake)
             {
                 m_VideoPlayer.playOnAwake = true; // Set play on awake for next enable.
@@ -66,21 +70,50 @@ namespace UnityEngine.XR.Templates.MR
 
         void OnEnable()
         {
+            if (m_VideoPlayer == null)
+                m_VideoPlayer = GetComponent<VideoPlayer>();
+
             if (m_VideoPlayer != null)
             {
                 m_VideoPlayer.frame = 0;
                 VideoPlay(); // Ensures correct UI state update if paused.
             }
 
-            m_Slider.value = 0.0f;
-            m_Slider.onValueChanged.AddListener(OnSliderValueChange);
-            m_Slider.gameObject.SetActive(true);
-            if (m_HideSliderAfterFewSeconds)
-                StartCoroutine(HideSliderAfterSeconds());
+            if (m_Slider != null)
+            {
+                m_Slider.value = 0.0f;
+                m_Slider.onValueChanged.RemoveListener(OnSliderValueChange);
+                m_Slider.onValueChanged.AddListener(OnSliderValueChange);
+                m_Slider.gameObject.SetActive(true);
+            }
+
+            if (m_HideSliderAfterFewSeconds && m_Slider != null)
+            {
+                if (m_HideSliderCoroutine != null)
+                    StopCoroutine(m_HideSliderCoroutine);
+                m_HideSliderCoroutine = StartCoroutine(HideSliderAfterSeconds());
+            }
+        }
+
+        void OnDisable()
+        {
+            if (m_Slider != null)
+                m_Slider.onValueChanged.RemoveListener(OnSliderValueChange);
+
+            if (m_HideSliderCoroutine != null)
+            {
+                StopCoroutine(m_HideSliderCoroutine);
+                m_HideSliderCoroutine = null;
+            }
+
+            m_IsDragging = false;
         }
 
         void Update()
         {
+            if (m_VideoPlayer == null || m_Slider == null)
+                return;
+
             if (m_VideoJumpPending)
             {
                 // We're trying to jump to a new position, but we're checking to make sure the video player is updated to our new jump frame.
@@ -124,7 +157,9 @@ namespace UnityEngine.XR.Templates.MR
         IEnumerator HideSliderAfterSeconds(float duration = 1f)
         {
             yield return new WaitForSeconds(duration);
-            m_Slider.gameObject.SetActive(false);
+            if (m_Slider != null)
+                m_Slider.gameObject.SetActive(false);
+            m_HideSliderCoroutine = null;
         }
 
         public void OnDrag()
@@ -135,6 +170,9 @@ namespace UnityEngine.XR.Templates.MR
 
         void VideoJump()
         {
+            if (m_VideoPlayer == null || m_Slider == null)
+                return;
+
             m_VideoJumpPending = true;
             var frame = m_VideoPlayer.frameCount * m_Slider.value;
             m_LastFrameBeforeScrub = m_VideoPlayer.frame;
@@ -143,6 +181,9 @@ namespace UnityEngine.XR.Templates.MR
 
         public void PlayOrPauseVideo()
         {
+            if (m_VideoPlayer == null)
+                return;
+
             if (m_VideoIsPlaying)
             {
                 VideoStop();
@@ -174,18 +215,32 @@ namespace UnityEngine.XR.Templates.MR
 
         void VideoStop()
         {
+            if (m_VideoPlayer == null)
+                return;
+
             m_VideoIsPlaying = false;
             m_VideoPlayer.Pause();
-            m_ButtonPlayOrPauseIcon.sprite = m_IconPlay;
-            m_ButtonPlayOrPause.SetActive(true);
+
+            if (m_ButtonPlayOrPauseIcon != null && m_IconPlay != null)
+                m_ButtonPlayOrPauseIcon.sprite = m_IconPlay;
+
+            if (m_ButtonPlayOrPause != null)
+                m_ButtonPlayOrPause.SetActive(true);
         }
 
         void VideoPlay()
         {
+            if (m_VideoPlayer == null)
+                return;
+
             m_VideoIsPlaying = true;
             m_VideoPlayer.Play();
-            m_ButtonPlayOrPauseIcon.sprite = m_IconPause;
-            m_ButtonPlayOrPause.SetActive(false);
+
+            if (m_ButtonPlayOrPauseIcon != null && m_IconPause != null)
+                m_ButtonPlayOrPauseIcon.sprite = m_IconPause;
+
+            if (m_ButtonPlayOrPause != null)
+                m_ButtonPlayOrPause.SetActive(false);
         }
     }
 }

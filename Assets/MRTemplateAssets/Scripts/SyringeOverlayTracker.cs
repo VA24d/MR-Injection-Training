@@ -87,6 +87,9 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField]
         bool m_UseHandFrameDirectionAssist = true;
 
+        [SerializeField]
+        bool m_TrackLeftHand = true;
+
         [SerializeField, Range(0f, 1f)]
         float m_HandFrameDirectionBlend = 0.72f;
 
@@ -241,6 +244,7 @@ namespace UnityEngine.XR.Templates.MR
         Vector3 m_NeedleTipPoint;
 
         public bool hasValidTracking => m_HasValidTracking;
+        public bool isTrackingLeftHand => m_TrackLeftHand;
         public Vector3 plungerPoint => m_PlungerPoint;
         public Vector3 leftWingPoint => m_SmoothedPoints.leftWing;
         public Vector3 rightWingPoint => m_SmoothedPoints.rightWing;
@@ -390,8 +394,8 @@ namespace UnityEngine.XR.Templates.MR
                 return;
             }
 
-            var leftHand = m_HandSubsystem.leftHand;
-            if (!leftHand.isTracked || !TryBuildSyringePoints(leftHand, out var points))
+            var syringeHand = m_TrackLeftHand ? m_HandSubsystem.leftHand : m_HandSubsystem.rightHand;
+            if (!syringeHand.isTracked || !TryBuildSyringePoints(syringeHand, out var points))
             {
                 SetOverlayVisible(false);
                 m_HasValidTracking = false;
@@ -402,12 +406,12 @@ namespace UnityEngine.XR.Templates.MR
                 return;
             }
 
-            var rightHand = m_HandSubsystem.rightHand;
+            var tapHand = m_TrackLeftHand ? m_HandSubsystem.rightHand : m_HandSubsystem.leftHand;
             if (m_IsCalibratingMarker)
-                ProcessCalibrationTapInput(leftHand, rightHand, points);
+                ProcessCalibrationTapInput(syringeHand, tapHand, points);
 
             if (m_EnableMarkerAssist && m_IsMarkerCalibrated)
-                ApplyMarkerAssistedDirection(leftHand, ref points);
+                ApplyMarkerAssistedDirection(syringeHand, ref points);
 
             if (!m_HasSmoothedPose)
             {
@@ -521,6 +525,35 @@ namespace UnityEngine.XR.Templates.MR
         public void ResetGripCalibration()
         {
             m_HasGripCalibration = false;
+        }
+
+        public void SetTrackingHand(bool trackLeftHand)
+        {
+            if (m_TrackLeftHand == trackLeftHand)
+                return;
+
+            m_TrackLeftHand = trackLeftHand;
+            ResetTrackingStateForHandSwap();
+        }
+
+        public void SwapTrackingHand()
+        {
+            SetTrackingHand(!m_TrackLeftHand);
+        }
+
+        void ResetTrackingStateForHandSwap()
+        {
+            m_HasValidTracking = false;
+            m_HasSmoothedPose = false;
+            m_HasSmoothedDirection = false;
+            m_HasGripCalibration = false;
+            m_HasPreviousRightTip = false;
+            m_RightTapArmed = false;
+            m_CalibrationTapCount = 0;
+            m_MarkerTapWorldSamples.Clear();
+            m_MarkerColorSamples.Clear();
+            ClearMarkerDebugVisuals();
+            SetOverlayVisible(false);
         }
 
         void EnsureHandSubsystem()
