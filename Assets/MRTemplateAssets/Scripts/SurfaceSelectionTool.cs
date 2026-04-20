@@ -17,11 +17,8 @@ namespace UnityEngine.XR.Templates.MR
         float m_PinchReleaseDistance = 0.026f;
 
         [Header("Surface dimensions")]
-        [SerializeField, Min(0.02f)]
-        float m_MinSurfaceWidth = 0.04f;
-
-        [SerializeField, Min(0.02f)]
-        float m_MinSurfaceDepth = 0.04f;
+        [SerializeField, Min(0.0005f)]
+        float m_MinRenderableDimension = 0.001f;
 
         [SerializeField]
         float m_SurfaceVerticalOffset = 0.0015f;
@@ -47,7 +44,7 @@ namespace UnityEngine.XR.Templates.MR
 
         public bool isSelectingSurface => m_IsSelectingSurface;
         public bool hasPlacedSurface => m_HasPlacedSurface;
-        public int completedPinches => m_HasPlacedSurface ? 2 : (m_HasFirstPoint ? 1 : 0);
+        public int completedPinches => m_HasPlacedSurface ? 3 : (m_HasSecondPoint ? 2 : (m_HasFirstPoint ? 1 : 0));
 
         XRHandSubsystem m_HandSubsystem;
         static List<XRHandSubsystem> s_HandSubsystems;
@@ -55,8 +52,10 @@ namespace UnityEngine.XR.Templates.MR
         Transform m_SurfaceRoot;
         Transform m_FirstPointDot;
         Transform m_SecondPointDot;
+        Transform m_ThirdPointDot;
         Transform m_SurfacePlane;
-        LineRenderer m_PreviewLine;
+        LineRenderer m_FirstSegmentLine;
+        LineRenderer m_SecondSegmentLine;
 
         Material m_RuntimePointMaterial;
         Material m_RuntimeLineMaterial;
@@ -64,11 +63,13 @@ namespace UnityEngine.XR.Templates.MR
 
         bool m_IsSelectingSurface;
         bool m_HasFirstPoint;
+        bool m_HasSecondPoint;
         bool m_HasPlacedSurface;
         bool m_PinchEngaged;
 
         Vector3 m_FirstPoint;
         Vector3 m_SecondPoint;
+        Vector3 m_ThirdPoint;
 
         void Awake()
         {
@@ -100,16 +101,21 @@ namespace UnityEngine.XR.Templates.MR
             m_IsSelectingSurface = true;
             m_PinchEngaged = false;
             m_HasFirstPoint = false;
+            m_HasSecondPoint = false;
             m_HasPlacedSurface = false;
 
             if (m_FirstPointDot != null)
                 m_FirstPointDot.gameObject.SetActive(false);
             if (m_SecondPointDot != null)
                 m_SecondPointDot.gameObject.SetActive(false);
+            if (m_ThirdPointDot != null)
+                m_ThirdPointDot.gameObject.SetActive(false);
             if (m_SurfacePlane != null)
                 m_SurfacePlane.gameObject.SetActive(false);
-            if (m_PreviewLine != null)
-                m_PreviewLine.enabled = false;
+            if (m_FirstSegmentLine != null)
+                m_FirstSegmentLine.enabled = false;
+            if (m_SecondSegmentLine != null)
+                m_SecondSegmentLine.enabled = false;
         }
 
         public void CancelSurfaceSelection()
@@ -117,13 +123,18 @@ namespace UnityEngine.XR.Templates.MR
             m_IsSelectingSurface = false;
             m_PinchEngaged = false;
             m_HasFirstPoint = false;
+            m_HasSecondPoint = false;
 
             if (m_FirstPointDot != null)
                 m_FirstPointDot.gameObject.SetActive(false);
             if (m_SecondPointDot != null)
                 m_SecondPointDot.gameObject.SetActive(false);
-            if (m_PreviewLine != null)
-                m_PreviewLine.enabled = false;
+            if (m_ThirdPointDot != null)
+                m_ThirdPointDot.gameObject.SetActive(false);
+            if (m_FirstSegmentLine != null)
+                m_FirstSegmentLine.enabled = false;
+            if (m_SecondSegmentLine != null)
+                m_SecondSegmentLine.enabled = false;
         }
 
         public void ClearPlacedSurface()
@@ -131,16 +142,21 @@ namespace UnityEngine.XR.Templates.MR
             m_IsSelectingSurface = false;
             m_PinchEngaged = false;
             m_HasFirstPoint = false;
+            m_HasSecondPoint = false;
             m_HasPlacedSurface = false;
 
             if (m_FirstPointDot != null)
                 m_FirstPointDot.gameObject.SetActive(false);
             if (m_SecondPointDot != null)
                 m_SecondPointDot.gameObject.SetActive(false);
+            if (m_ThirdPointDot != null)
+                m_ThirdPointDot.gameObject.SetActive(false);
             if (m_SurfacePlane != null)
                 m_SurfacePlane.gameObject.SetActive(false);
-            if (m_PreviewLine != null)
-                m_PreviewLine.enabled = false;
+            if (m_FirstSegmentLine != null)
+                m_FirstSegmentLine.enabled = false;
+            if (m_SecondSegmentLine != null)
+                m_SecondSegmentLine.enabled = false;
         }
 
         void EnsureHandSubsystem()
@@ -153,21 +169,11 @@ namespace UnityEngine.XR.Templates.MR
         {
             if (!TryGetPinchPose(out var pinchPoint, out var pinchDistance))
             {
-                if (m_HasFirstPoint && m_PreviewLine != null)
-                {
-                    m_PreviewLine.enabled = true;
-                    m_PreviewLine.SetPosition(0, m_FirstPoint);
-                    m_PreviewLine.SetPosition(1, m_FirstPoint);
-                }
+                UpdateSelectionPreviewLines(default, hasPinchPose: false);
                 return;
             }
 
-            if (m_HasFirstPoint && m_PreviewLine != null)
-            {
-                m_PreviewLine.enabled = true;
-                m_PreviewLine.SetPosition(0, m_FirstPoint);
-                m_PreviewLine.SetPosition(1, pinchPoint);
-            }
+            UpdateSelectionPreviewLines(pinchPoint, hasPinchPose: true);
 
             if (!m_PinchEngaged && pinchDistance <= m_PinchEngageDistance)
             {
@@ -180,12 +186,46 @@ namespace UnityEngine.XR.Templates.MR
             }
         }
 
+        void UpdateSelectionPreviewLines(Vector3 pinchPoint, bool hasPinchPose)
+        {
+            if (m_FirstSegmentLine == null || m_SecondSegmentLine == null)
+                return;
+
+            if (!m_HasFirstPoint)
+            {
+                m_FirstSegmentLine.enabled = false;
+                m_SecondSegmentLine.enabled = false;
+                return;
+            }
+
+            if (!m_HasSecondPoint)
+            {
+                m_FirstSegmentLine.enabled = true;
+                var dynamicEnd = hasPinchPose ? pinchPoint : m_FirstPoint;
+                m_FirstSegmentLine.SetPosition(0, m_FirstPoint);
+                m_FirstSegmentLine.SetPosition(1, dynamicEnd);
+                m_SecondSegmentLine.enabled = false;
+                return;
+            }
+
+            m_FirstSegmentLine.enabled = true;
+            m_FirstSegmentLine.SetPosition(0, m_FirstPoint);
+            m_FirstSegmentLine.SetPosition(1, m_SecondPoint);
+
+            m_SecondSegmentLine.enabled = true;
+            var secondDynamicEnd = hasPinchPose ? pinchPoint : m_SecondPoint;
+            m_SecondSegmentLine.SetPosition(0, m_SecondPoint);
+            m_SecondSegmentLine.SetPosition(1, secondDynamicEnd);
+        }
+
         void RegisterPinchPoint(Vector3 pinchPoint)
         {
             if (!m_HasFirstPoint)
             {
                 m_FirstPoint = pinchPoint;
                 m_HasFirstPoint = true;
+                m_HasSecondPoint = false;
+                m_HasPlacedSurface = false;
 
                 if (m_FirstPointDot != null)
                 {
@@ -195,26 +235,50 @@ namespace UnityEngine.XR.Templates.MR
 
                 if (m_SecondPointDot != null)
                     m_SecondPointDot.gameObject.SetActive(false);
+                if (m_ThirdPointDot != null)
+                    m_ThirdPointDot.gameObject.SetActive(false);
 
                 return;
             }
 
-            m_SecondPoint = pinchPoint;
+            if (!m_HasSecondPoint)
+            {
+                m_SecondPoint = pinchPoint;
+                m_HasSecondPoint = true;
+
+                if (m_SecondPointDot != null)
+                {
+                    m_SecondPointDot.position = m_SecondPoint;
+                    m_SecondPointDot.gameObject.SetActive(true);
+                }
+
+                if (m_FirstSegmentLine != null)
+                {
+                    m_FirstSegmentLine.enabled = true;
+                    m_FirstSegmentLine.SetPosition(0, m_FirstPoint);
+                    m_FirstSegmentLine.SetPosition(1, m_SecondPoint);
+                }
+
+                return;
+            }
+
+            m_ThirdPoint = pinchPoint;
             m_HasPlacedSurface = true;
             m_IsSelectingSurface = false;
             m_HasFirstPoint = false;
+            m_HasSecondPoint = false;
 
-            if (m_SecondPointDot != null)
+            if (m_ThirdPointDot != null)
             {
-                m_SecondPointDot.position = m_SecondPoint;
-                m_SecondPointDot.gameObject.SetActive(true);
+                m_ThirdPointDot.position = m_ThirdPoint;
+                m_ThirdPointDot.gameObject.SetActive(true);
             }
 
-            if (m_PreviewLine != null)
+            if (m_SecondSegmentLine != null)
             {
-                m_PreviewLine.enabled = true;
-                m_PreviewLine.SetPosition(0, m_FirstPoint);
-                m_PreviewLine.SetPosition(1, m_SecondPoint);
+                m_SecondSegmentLine.enabled = true;
+                m_SecondSegmentLine.SetPosition(0, m_SecondPoint);
+                m_SecondSegmentLine.SetPosition(1, m_ThirdPoint);
             }
 
             UpdatePlaneFromPoints();
@@ -248,41 +312,73 @@ namespace UnityEngine.XR.Templates.MR
 
             var first = m_FirstPoint;
             var second = m_SecondPoint;
+            var third = m_ThirdPoint;
 
-            var y = 0.5f * (first.y + second.y) + m_SurfaceVerticalOffset;
+            var y = (first.y + second.y + third.y) / 3f + m_SurfaceVerticalOffset;
             var firstFlat = new Vector3(first.x, y, first.z);
             var secondFlat = new Vector3(second.x, y, second.z);
+            var thirdFlat = new Vector3(third.x, y, third.z);
 
-            // Treat the two pinch points as opposite diagonal corners on the horizontal XZ plane.
-            var width = Mathf.Abs(secondFlat.x - firstFlat.x);
-            var depth = Mathf.Abs(secondFlat.z - firstFlat.z);
+            // Use three pinches to estimate plane orientation and rectangle extents from X/Z coordinates.
+            var right = Vector3.ProjectOnPlane(secondFlat - firstFlat, Vector3.up);
+            if (right.sqrMagnitude < 0.000001f)
+                right = Vector3.ProjectOnPlane(thirdFlat - firstFlat, Vector3.up);
+            if (right.sqrMagnitude < 0.000001f)
+                right = Vector3.right;
+            right.Normalize();
 
-            // Keep corners true to pinch positions; only guard against a fully collapsed axis.
-            const float kMinRenderableDimension = 0.001f;
-            if (width < kMinRenderableDimension)
-                width = kMinRenderableDimension;
-            if (depth < kMinRenderableDimension)
-                depth = kMinRenderableDimension;
+            var forward = Vector3.Cross(Vector3.up, right);
+            if (forward.sqrMagnitude < 0.000001f)
+                forward = Vector3.forward;
+            forward.Normalize();
 
-            var center = new Vector3(
-                0.5f * (firstFlat.x + secondFlat.x),
-                y,
-                0.5f * (firstFlat.z + secondFlat.z));
+            var u0 = 0f;
+            var v0 = 0f;
+            var dSecond = secondFlat - firstFlat;
+            var dThird = thirdFlat - firstFlat;
+            var u1 = Vector3.Dot(dSecond, right);
+            var v1 = Vector3.Dot(dSecond, forward);
+            var u2 = Vector3.Dot(dThird, right);
+            var v2 = Vector3.Dot(dThird, forward);
+
+            var minU = Mathf.Min(u0, u1, u2);
+            var maxU = Mathf.Max(u0, u1, u2);
+            var minV = Mathf.Min(v0, v1, v2);
+            var maxV = Mathf.Max(v0, v1, v2);
+
+            var width = maxU - minU;
+            var depth = maxV - minV;
+            if (width < m_MinRenderableDimension)
+                width = m_MinRenderableDimension;
+            if (depth < m_MinRenderableDimension)
+                depth = m_MinRenderableDimension;
+
+            var center = firstFlat + right * ((minU + maxU) * 0.5f) + forward * ((minV + maxV) * 0.5f);
 
             m_FirstPoint = firstFlat;
             m_SecondPoint = secondFlat;
+            m_ThirdPoint = thirdFlat;
             if (m_FirstPointDot != null)
                 m_FirstPointDot.position = m_FirstPoint;
             if (m_SecondPointDot != null)
                 m_SecondPointDot.position = m_SecondPoint;
-            if (m_PreviewLine != null)
+            if (m_ThirdPointDot != null)
+                m_ThirdPointDot.position = m_ThirdPoint;
+            if (m_FirstSegmentLine != null)
             {
-                m_PreviewLine.SetPosition(0, m_FirstPoint);
-                m_PreviewLine.SetPosition(1, m_SecondPoint);
+                m_FirstSegmentLine.enabled = true;
+                m_FirstSegmentLine.SetPosition(0, m_FirstPoint);
+                m_FirstSegmentLine.SetPosition(1, m_SecondPoint);
+            }
+            if (m_SecondSegmentLine != null)
+            {
+                m_SecondSegmentLine.enabled = true;
+                m_SecondSegmentLine.SetPosition(0, m_SecondPoint);
+                m_SecondSegmentLine.SetPosition(1, m_ThirdPoint);
             }
 
             m_SurfacePlane.position = center;
-            m_SurfacePlane.rotation = Quaternion.identity;
+            m_SurfacePlane.rotation = Quaternion.LookRotation(forward, Vector3.up);
             m_SurfacePlane.localScale = new Vector3(width / 10f, 1f, depth / 10f);
             m_SurfacePlane.gameObject.SetActive(true);
         }
@@ -301,22 +397,13 @@ namespace UnityEngine.XR.Templates.MR
 
             m_FirstPointDot = CreatePoint("Surface Point A", m_RuntimePointMaterial, m_PointSize);
             m_SecondPointDot = CreatePoint("Surface Point B", m_RuntimePointMaterial, m_PointSize);
+            m_ThirdPointDot = CreatePoint("Surface Point C", m_RuntimePointMaterial, m_PointSize);
             m_FirstPointDot.gameObject.SetActive(false);
             m_SecondPointDot.gameObject.SetActive(false);
+            m_ThirdPointDot.gameObject.SetActive(false);
 
-            var lineObject = new GameObject("Surface Selection Line");
-            lineObject.transform.SetParent(m_SurfaceRoot, false);
-            m_PreviewLine = lineObject.AddComponent<LineRenderer>();
-            m_PreviewLine.positionCount = 2;
-            m_PreviewLine.material = m_RuntimeLineMaterial;
-            m_PreviewLine.useWorldSpace = true;
-            m_PreviewLine.startWidth = m_LineWidth;
-            m_PreviewLine.endWidth = m_LineWidth;
-            m_PreviewLine.numCapVertices = 4;
-            m_PreviewLine.shadowCastingMode = ShadowCastingMode.Off;
-            m_PreviewLine.receiveShadows = false;
-            m_PreviewLine.lightProbeUsage = LightProbeUsage.Off;
-            m_PreviewLine.enabled = false;
+            m_FirstSegmentLine = CreateLine("Surface Selection Line A-B", m_RuntimeLineMaterial);
+            m_SecondSegmentLine = CreateLine("Surface Selection Line B-C", m_RuntimeLineMaterial);
 
             var planeObject = GameObject.CreatePrimitive(PrimitiveType.Plane);
             planeObject.name = "Selected Surface Plane";
@@ -329,6 +416,25 @@ namespace UnityEngine.XR.Templates.MR
 
             m_SurfacePlane = planeObject.transform;
             m_SurfacePlane.gameObject.SetActive(false);
+        }
+
+        LineRenderer CreateLine(string name, Material material)
+        {
+            var lineObject = new GameObject(name);
+            lineObject.transform.SetParent(m_SurfaceRoot, false);
+
+            var line = lineObject.AddComponent<LineRenderer>();
+            line.positionCount = 2;
+            line.material = material;
+            line.useWorldSpace = true;
+            line.startWidth = m_LineWidth;
+            line.endWidth = m_LineWidth;
+            line.numCapVertices = 4;
+            line.shadowCastingMode = ShadowCastingMode.Off;
+            line.receiveShadows = false;
+            line.lightProbeUsage = LightProbeUsage.Off;
+            line.enabled = false;
+            return line;
         }
 
         Transform CreatePoint(string name, Material material, float size)
