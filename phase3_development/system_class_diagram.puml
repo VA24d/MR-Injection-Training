@@ -1,0 +1,122 @@
+@startuml
+left to right direction
+skinparam classAttributeIconSize 0
+
+class GoalManager {
+  +ForceCompleteGoal()
+  +ForceEndAllGoals()
+  +ResetCoaching()
+  +TogglePlayer(visibility : bool)
+  +ResumeCoachingPanelHeadFollow()
+  +PinCoachingPanelToWorldSpace()
+}
+
+class SyringeCalibrationButtonBridge {
+  +currentStep : TutorialStep
+  +isTutorialRunning : bool
+  +isFinished : bool
+  +selectedInjectionType : InjectionType
+  +finalScore : float
+  +BeginTutorial()
+  +AdvanceStep()
+  +PreviousStep()
+  +CycleInjectionType()
+  +GetScoreBreakdownDisplayString() : string
+}
+
+class ScoreBreakdown {
+  +calibration : float
+  +injectionType : float
+  +fill : float
+  +bubble : float
+  +angle : float
+  +insertion : float
+  +flow : float
+  +removal : float
+  +total : float
+}
+
+class FloatingCoachingUIGrab {
+  +AllowGoalManagerAutoFollow : bool
+  +RefitGrabCollider()
+  +ResumeFollowingHead()
+  +PinToWorldSpace()
+}
+
+class SyringeOverlayTracker {
+  +hasValidTracking : bool
+  +isMarkerCalibrated : bool
+  +calibrationTapCount : int
+  +TryGetSyringePose(out pose)
+  +StartMarkerCalibration()
+  +CancelMarkerCalibration()
+  +ResetMarkerCalibration()
+  +SwapTrackingHand()
+}
+
+class SurfaceSelectionTool {
+  +isSelectingSurface : bool
+  +hasPlacedSurface : bool
+  +BeginSurfaceSelection()
+  +CancelSurfaceSelection()
+  +TryGetPlacedSurface(out pose, out size)
+}
+
+class HandOverlaySkeletonToggleBridge {
+  +isSkeletonVisible : bool
+  +ToggleSkeleton()
+  +SetSkeletonVisible(showSkeleton : bool)
+}
+
+class SyringePlaneAngleOverlay {
+  +isVisible : bool
+  +currentAngleDegrees : float
+}
+
+enum TutorialStep {
+  Start
+  InjectionType
+  Calibration
+  FillSyringe
+  BubbleCheckManual
+  InjectionAngle
+  InsertionSpeedFlowRate
+  RemoveSpeed
+  FinalScore
+}
+
+enum InjectionType {
+  None
+  Intramuscular
+  Subcutaneous
+  Intradermal
+  Intravenous
+}
+
+class LazyFollow <<Unity_XR>>
+class XRGrabInteractable <<Unity_XR>>
+class XRHandSubsystem <<Unity_XR>>
+
+GoalManager --> SyringeCalibrationButtonBridge : orchestrates
+GoalManager --> SyringeOverlayTracker : calibration state
+GoalManager --> SurfaceSelectionTool : surface workflow
+GoalManager --> HandOverlaySkeletonToggleBridge : skeleton toggle
+GoalManager --> SyringePlaneAngleOverlay : angle guidance
+GoalManager --> FloatingCoachingUIGrab : panel pin/follow
+
+SyringeCalibrationButtonBridge *-- ScoreBreakdown : computes
+SyringeCalibrationButtonBridge --> TutorialStep
+SyringeCalibrationButtonBridge --> InjectionType
+SyringeCalibrationButtonBridge --> SyringeOverlayTracker : reads pose/calibration
+SyringeCalibrationButtonBridge --> HandOverlaySkeletonToggleBridge
+
+FloatingCoachingUIGrab --> LazyFollow : enables/disables follow
+FloatingCoachingUIGrab --> XRGrabInteractable : drag interaction
+
+SyringePlaneAngleOverlay --> SyringeOverlayTracker : syringe pose
+SyringePlaneAngleOverlay --> SurfaceSelectionTool : placed plane
+
+SyringeOverlayTracker ..> XRHandSubsystem : hand joints
+SurfaceSelectionTool ..> XRHandSubsystem : pinch input
+
+@enduml
