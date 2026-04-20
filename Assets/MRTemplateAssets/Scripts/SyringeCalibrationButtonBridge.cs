@@ -17,10 +17,6 @@ namespace UnityEngine.XR.Templates.MR
             "UI/Hand Menu Setup MR Template Variant/Follow GameObject/Spatial Panel Scroll/Main Menu/Settings Tab/Relaunch Coaching Button";
 
         [SerializeField]
-        string m_ScrollCardPath =
-            "UI/Hand Menu Setup MR Template Variant/Follow GameObject/Spatial Panel Scroll";
-
-        [SerializeField]
         string m_CalibrationButtonName = "Syringe Calibration Button";
 
         [SerializeField]
@@ -51,13 +47,6 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField]
         string m_SurfaceMissingToolLabel = "Select Surface";
 
-        [Header("Card scrolling")]
-        [SerializeField]
-        bool m_EnsureScrollableCard = true;
-
-        [SerializeField, Min(0f)]
-        float m_ScrollContentPadding = 24f;
-
         SyringeOverlayTracker m_Tracker;
         SurfaceSelectionTool m_SurfaceTool;
 
@@ -70,9 +59,6 @@ namespace UnityEngine.XR.Templates.MR
         Button m_SurfaceButton;
         TextMeshProUGUI m_SurfaceLabel;
         string m_LastSurfaceText = string.Empty;
-
-        RectTransform m_SettingsTabRect;
-        ScrollRect m_SettingsScrollRect;
 
         void Start()
         {
@@ -87,14 +73,12 @@ namespace UnityEngine.XR.Templates.MR
             CreateOrFindCalibrationButton();
             CreateOrFindSurfaceButton();
             PositionSurfaceButtonBelowCalibration();
-            EnsureSettingsCardScrollable();
             RefreshButtonLabels(force: true);
         }
 
         void Update()
         {
             PositionSurfaceButtonBelowCalibration();
-            EnsureSettingsCardScrollable();
             RefreshButtonLabels(force: false);
         }
 
@@ -238,62 +222,6 @@ namespace UnityEngine.XR.Templates.MR
 
             if (surfaceTransform.GetSiblingIndex() != desiredIndex)
                 surfaceTransform.SetSiblingIndex(desiredIndex);
-        }
-
-        void EnsureSettingsCardScrollable()
-        {
-            if (!m_EnsureScrollableCard)
-                return;
-
-            if (m_SettingsTabRect == null)
-            {
-                var settingsTab = GameObject.Find(m_SettingsTabPath);
-                if (settingsTab != null)
-                    m_SettingsTabRect = settingsTab.GetComponent<RectTransform>();
-            }
-
-            if (m_SettingsTabRect == null)
-                return;
-
-            if (m_SettingsScrollRect == null)
-            {
-                var scrollCard = GameObject.Find(m_ScrollCardPath);
-                if (scrollCard != null)
-                    m_SettingsScrollRect = scrollCard.GetComponent<ScrollRect>() ?? scrollCard.GetComponentInChildren<ScrollRect>(true);
-
-                if (m_SettingsScrollRect == null)
-                    m_SettingsScrollRect = m_SettingsTabRect.GetComponentInParent<ScrollRect>(true);
-            }
-
-            if (m_SettingsScrollRect != null)
-            {
-                m_SettingsScrollRect.horizontal = false;
-                m_SettingsScrollRect.vertical = true;
-                m_SettingsScrollRect.movementType = ScrollRect.MovementType.Clamped;
-
-                var content = m_SettingsScrollRect.content;
-                if (content == null || !m_SettingsTabRect.IsChildOf(content))
-                    m_SettingsScrollRect.content = m_SettingsTabRect;
-            }
-
-            var targetContent = m_SettingsScrollRect != null && m_SettingsScrollRect.content != null
-                ? m_SettingsScrollRect.content
-                : m_SettingsTabRect;
-            ExpandContentHeightToChildren(targetContent);
-        }
-
-        void ExpandContentHeightToChildren(RectTransform content)
-        {
-            if (content == null)
-                return;
-
-            var bounds = RectTransformUtility.CalculateRelativeRectTransformBounds(content);
-            var requiredHeight = bounds.size.y + m_ScrollContentPadding;
-            var currentHeight = content.rect.height;
-            if (requiredHeight <= currentHeight + 0.5f)
-                return;
-
-            content.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, requiredHeight);
         }
 
         void RefreshButtonLabels(bool force)
