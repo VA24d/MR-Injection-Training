@@ -80,6 +80,10 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField]
         bool m_DrawJointMarkers = true;
 
+        [SerializeField]
+        [Tooltip("When false, syringe visual overlays are hidden while tracking data remains active.")]
+        bool m_OverlayVisualsEnabled = true;
+
         [SerializeField, Range(0f, 1f)]
         float m_PositionSmoothing = 0.35f;
 
@@ -245,6 +249,7 @@ namespace UnityEngine.XR.Templates.MR
 
         public bool hasValidTracking => m_HasValidTracking;
         public bool isTrackingLeftHand => m_TrackLeftHand;
+        public bool overlayVisualsEnabled => m_OverlayVisualsEnabled;
         public Vector3 plungerPoint => m_PlungerPoint;
         public Vector3 leftWingPoint => m_SmoothedPoints.leftWing;
         public Vector3 rightWingPoint => m_SmoothedPoints.rightWing;
@@ -430,10 +435,18 @@ namespace UnityEngine.XR.Templates.MR
                 SmoothTo(ref m_SmoothedPoints.needleTip, points.needleTip, t);
             }
 
-            UpdateVisuals(m_SmoothedPoints);
-            UpdateMarkerDotVisual();
-            UpdateMarkerDebugVisuals();
-            SetOverlayVisible(true);
+            if (m_OverlayVisualsEnabled)
+            {
+                UpdateVisuals(m_SmoothedPoints);
+                UpdateMarkerDotVisual();
+                UpdateMarkerDebugVisuals();
+                SetOverlayVisible(true);
+            }
+            else
+            {
+                SetOverlayVisible(false);
+                ClearMarkerDebugVisuals();
+            }
 
             m_HasValidTracking = true;
             m_PlungerPoint = m_SmoothedPoints.plunger;
@@ -539,6 +552,23 @@ namespace UnityEngine.XR.Templates.MR
         public void SwapTrackingHand()
         {
             SetTrackingHand(!m_TrackLeftHand);
+        }
+
+        public void SetOverlayVisualsEnabled(bool enabled)
+        {
+            if (m_OverlayVisualsEnabled == enabled)
+                return;
+
+            m_OverlayVisualsEnabled = enabled;
+            if (!enabled)
+            {
+                SetOverlayVisible(false);
+                ClearMarkerDebugVisuals();
+            }
+            else if (m_HasValidTracking)
+            {
+                SetOverlayVisible(true);
+            }
         }
 
         void ResetTrackingStateForHandSwap()

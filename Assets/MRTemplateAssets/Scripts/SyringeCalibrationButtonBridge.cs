@@ -124,6 +124,9 @@ namespace UnityEngine.XR.Templates.MR
         float m_MinInsertionDepthCm = 0.25f;
 
         [SerializeField, Min(0.1f)]
+        float m_MaxInsertionDepthCm = 1f;
+
+        [SerializeField, Min(0.1f)]
         float m_MaxLateralStabilityCmPerSec = 6f;
 
         [SerializeField, Min(0.1f)]
@@ -134,6 +137,18 @@ namespace UnityEngine.XR.Templates.MR
 
         [SerializeField, Min(0.01f)]
         float m_MinPlungerTravelToCompleteCm = 0.8f;
+
+        [SerializeField, Min(0.01f)]
+        float m_DispenseStartPlungerRateCmPerSec = 0.12f;
+
+        [SerializeField, Min(0.01f)]
+        float m_DispenseStopPlungerRateCmPerSec = 0.08f;
+
+        [SerializeField, Min(0f)]
+        float m_DispenseStopHoldSeconds = 0.2f;
+
+        [SerializeField, Min(0.1f)]
+        float m_DispenseAutoAdvanceSeconds = 4f;
 
         [SerializeField, Min(0.1f)]
         float m_TargetRemovalSpeedCmPerSec = 4.5f;
@@ -152,6 +167,14 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField, Min(0.5f)]
         [Tooltip("How quickly displayed lateral speed follows measured lateral speed (higher = snappier).")]
         float m_RemovalLateralSmoothing = 8f;
+
+        [SerializeField, Min(0f)]
+        [Tooltip("Depth threshold in cm considered fully removed from the surface during removal step.")]
+        float m_RemovalCompleteDepthCm = 0.02f;
+
+        [SerializeField, Min(0f)]
+        [Tooltip("After this many seconds on the syringe removal card, auto-advance to the score screen (if not already advanced).")]
+        float m_RemovalStepAutoAdvanceSeconds = 5f;
 
         [Header("Runtime state")]
         [SerializeField]
@@ -209,6 +232,9 @@ namespace UnityEngine.XR.Templates.MR
         float m_CurrentInsertionDepthCm;
 
         [SerializeField]
+        float m_EffectiveInsertionDepthTargetCm;
+
+        [SerializeField]
         float m_CurrentLateralStabilityCmPerSec;
 
         [SerializeField]
@@ -218,11 +244,22 @@ namespace UnityEngine.XR.Templates.MR
         float m_PlungerTravelNormalized;
 
         [SerializeField]
+        bool m_HasCompletedInsertionDepth;
+
+        [SerializeField]
+        bool m_HasBeenInsertedDuringRemoval;
+
+        [SerializeField]
+        bool m_HasStartedDispensePress;
+
+        [SerializeField]
         float m_AngleGuidanceErrorDegrees;
 
         float m_AngleHoldProgress;
         float m_InsertionHoldProgress;
         float m_RemovalHoldProgress;
+        float m_DispenseStopProgress;
+        float m_DispenseElapsedSeconds;
         Vector3 m_PreviousNeedleTip;
         Vector3 m_PlungerWorldPrev;
         bool m_HasPreviousNeedleTip;
@@ -247,10 +284,8 @@ namespace UnityEngine.XR.Templates.MR
         /// <summary>Smoothed lateral speed used for stability gate and scoring.</summary>
         public float removalLateralSmoothedCmPerSec => m_RemovalLateralSmoothedCmPerSec;
         public float maxRemovalLateralSpeedCmPerSec => m_MaxRemovalLateralSpeedCmPerSec;
-        /// <summary>True when not on the removal step, or when speed + stability hold has fully completed (manual Next allowed).</summary>
-        public bool removalCheckpointMet =>
-            m_CurrentStep != TutorialStep.RemoveSpeed ||
-            m_RemovalHoldProgress >= m_SpeedHoldSeconds - 0.001f;
+        /// <summary>When false, the coaching Next button is disabled. On the removal step, manual advance to the score screen is always allowed.</summary>
+        public bool removalCheckpointMet => true;
         public bool bubbleCheckCompleted => m_BubbleCheckCompleted;
         public bool surfaceCleanCompleted => m_SurfaceCleanCompleted;
 
@@ -277,12 +312,15 @@ namespace UnityEngine.XR.Templates.MR
 
         public bool isDispensePhase => m_IsDispensePhase;
         public float currentInsertionDepthCm => m_CurrentInsertionDepthCm;
+        public float effectiveInsertionDepthTargetCm => m_EffectiveInsertionDepthTargetCm;
         public float currentLateralStabilityCmPerSec => m_CurrentLateralStabilityCmPerSec;
         public float currentPlungerPushRateCmPerSec => m_CurrentPlungerPushRateCmPerSec;
         public float plungerTravelNormalized => m_PlungerTravelNormalized;
         public float angleGuidanceErrorDegrees => m_AngleGuidanceErrorDegrees;
         public float angleHoldSecondsRemaining => Mathf.Max(0f, m_AngleHoldSeconds - m_AngleHoldProgress);
         public float minInsertionDepthCm => m_MinInsertionDepthCm;
+        public float maxInsertionDepthCm => m_MaxInsertionDepthCm;
+        public bool hasCompletedInsertionDepth => m_HasCompletedInsertionDepth;
         public float maxLateralStabilityCmPerSec => m_MaxLateralStabilityCmPerSec;
         public float targetDispensePlungerRateCmPerSec => m_TargetDispensePlungerRateCmPerSec;
 
@@ -333,6 +371,9 @@ namespace UnityEngine.XR.Templates.MR
 
         public void BeginTutorial()
         {
+            // Force requested behavior regardless of legacy serialized scene values.
+            m_AngleHoldSeconds = 3f;
+
             m_IsTutorialRunning = true;
             m_IsFinished = false;
             m_FinalScore = 0f;
@@ -350,12 +391,18 @@ namespace UnityEngine.XR.Templates.MR
             m_LastScoreBreakdown = default;
             m_IsDispensePhase = false;
             m_CurrentInsertionDepthCm = 0f;
+            m_EffectiveInsertionDepthTargetCm = m_MinInsertionDepthCm;
             m_CurrentLateralStabilityCmPerSec = 0f;
             m_CurrentPlungerPushRateCmPerSec = 0f;
             m_PlungerTravelNormalized = 0f;
+            m_HasCompletedInsertionDepth = false;
+            m_HasStartedDispensePress = false;
+            m_DispenseStopProgress = 0f;
+            m_HasBeenInsertedDuringRemoval = false;
             m_AngleGuidanceErrorDegrees = 0f;
             m_InsertionStableHoldProgress = 0f;
             m_HasInitialPlungerDistance = false;
+            m_DispenseElapsedSeconds = 0f;
 
             GoToStep(TutorialStep.Start);
         }
@@ -639,26 +686,27 @@ namespace UnityEngine.XR.Templates.MR
             var hasTracking = TryUpdatePoseMetrics();
             if (!hasTracking && m_AutoAdvanceStub)
             {
-                if (!m_IsDispensePhase)
+                if (!m_HasCompletedInsertionDepth)
                 {
                     m_InsertionSpeedCmPerSec = Mathf.Lerp(m_InsertionSpeedCmPerSec, m_TargetInsertionSpeedCmPerSec, 3f * Time.deltaTime);
-                    m_CurrentInsertionDepthCm = Mathf.Lerp(m_CurrentInsertionDepthCm, m_MinInsertionDepthCm + 0.2f, 2.5f * Time.deltaTime);
+                    m_CurrentInsertionDepthCm = Mathf.Lerp(m_CurrentInsertionDepthCm, m_EffectiveInsertionDepthTargetCm + 0.1f, 2.5f * Time.deltaTime);
                     m_CurrentLateralStabilityCmPerSec = Mathf.Lerp(m_CurrentLateralStabilityCmPerSec, 0.6f, 2.5f * Time.deltaTime);
                     m_InsertionStableHoldProgress += Time.deltaTime;
                     if (m_InsertionStableHoldProgress >= m_InsertedStabilityHoldSeconds)
-                        m_IsDispensePhase = true;
+                        m_HasCompletedInsertionDepth = true;
                 }
                 else
                 {
+                    m_IsDispensePhase = true;
                     m_CurrentPlungerPushRateCmPerSec = Mathf.Lerp(m_CurrentPlungerPushRateCmPerSec, m_TargetDispensePlungerRateCmPerSec, 3f * Time.deltaTime);
                     m_FlowRateMlPerSec = Mathf.Lerp(m_FlowRateMlPerSec, m_TargetFlowRateMlPerSec, 3f * Time.deltaTime);
                     m_PlungerTravelNormalized = Mathf.Clamp01(m_PlungerTravelNormalized + Time.deltaTime * 0.4f);
                 }
             }
 
-            if (!m_IsDispensePhase)
+            if (!m_HasCompletedInsertionDepth)
             {
-                var insertedEnough = m_CurrentInsertionDepthCm >= m_MinInsertionDepthCm;
+                var insertedEnough = m_CurrentInsertionDepthCm >= m_EffectiveInsertionDepthTargetCm;
                 var stableEnough = m_CurrentLateralStabilityCmPerSec <= m_MaxLateralStabilityCmPerSec;
                 var movingForwardEnough = m_InsertionSpeedCmPerSec >= 0.15f;
 
@@ -671,12 +719,32 @@ namespace UnityEngine.XR.Templates.MR
 
                 if (m_InsertionStableHoldProgress >= m_InsertedStabilityHoldSeconds)
                 {
-                    m_IsDispensePhase = true;
+                    m_HasCompletedInsertionDepth = true;
                     m_InsertionHoldProgress = 0f;
                 }
             }
-            else
+
+            if (!m_IsDispensePhase)
             {
+                // One-way latch: once insertion depth is completed, plunger motion starts flow mode and never reverts.
+                if (m_HasCompletedInsertionDepth && m_CurrentPlungerPushRateCmPerSec >= m_DispenseStartPlungerRateCmPerSec)
+                    m_IsDispensePhase = true;
+            }
+
+            if (m_IsDispensePhase)
+            {
+                if (m_HasStartedDispensePress)
+                    m_DispenseElapsedSeconds += Time.deltaTime;
+
+                if (m_DispenseElapsedSeconds >= m_DispenseAutoAdvanceSeconds)
+                {
+                    GoToStep(TutorialStep.RemoveSpeed);
+                    return;
+                }
+
+                if (m_CurrentPlungerPushRateCmPerSec >= m_DispenseStartPlungerRateCmPerSec)
+                    m_HasStartedDispensePress = true;
+
                 var flowOk = Mathf.Abs(m_FlowRateMlPerSec - m_TargetFlowRateMlPerSec) <= 0.22f;
                 var plungerRateOk = Mathf.Abs(m_CurrentPlungerPushRateCmPerSec - m_TargetDispensePlungerRateCmPerSec) <= 0.8f;
                 var stableEnough = m_CurrentLateralStabilityCmPerSec <= m_MaxLateralStabilityCmPerSec;
@@ -686,6 +754,21 @@ namespace UnityEngine.XR.Templates.MR
                 else
                     m_InsertionHoldProgress = Mathf.Max(0f, m_InsertionHoldProgress - Time.deltaTime * 0.8f);
 
+                // User-requested behavior: once dispensing started, stopping plunger press advances to the next card.
+                if (m_HasStartedDispensePress)
+                {
+                    if (m_CurrentPlungerPushRateCmPerSec <= m_DispenseStopPlungerRateCmPerSec)
+                        m_DispenseStopProgress += Time.deltaTime;
+                    else
+                        m_DispenseStopProgress = 0f;
+
+                    if (m_DispenseStopProgress >= m_DispenseStopHoldSeconds)
+                    {
+                        GoToStep(TutorialStep.RemoveSpeed);
+                        return;
+                    }
+                }
+
                 var plungerComplete = m_PlungerTravelNormalized >= 0.98f;
                 if (plungerComplete)
                     GoToStep(TutorialStep.RemoveSpeed);
@@ -694,6 +777,12 @@ namespace UnityEngine.XR.Templates.MR
 
         void TickRemovalSpeedStep()
         {
+            if (m_StepElapsedSeconds >= m_RemovalStepAutoAdvanceSeconds)
+            {
+                GoToStep(TutorialStep.FinalScore);
+                return;
+            }
+
             var hasTracking = TryUpdatePoseMetrics();
             if (!hasTracking && m_AutoAdvanceStub)
             {
@@ -704,6 +793,15 @@ namespace UnityEngine.XR.Templates.MR
             {
                 var t = Mathf.Clamp01(m_RemovalLateralSmoothing * Time.deltaTime);
                 m_RemovalLateralSmoothedCmPerSec = Mathf.Lerp(m_RemovalLateralSmoothedCmPerSec, m_RemovalLateralSpeedCmPerSec, t);
+            }
+
+            if (m_CurrentInsertionDepthCm > m_RemovalCompleteDepthCm)
+                m_HasBeenInsertedDuringRemoval = true;
+
+            if (m_HasBeenInsertedDuringRemoval && m_CurrentInsertionDepthCm <= m_RemovalCompleteDepthCm)
+            {
+                GoToStep(TutorialStep.FinalScore);
+                return;
             }
 
             var removeOk = Mathf.Abs(m_RemovalSpeedCmPerSec - m_TargetRemovalSpeedCmPerSec) <= 1.5f;
@@ -737,12 +835,20 @@ namespace UnityEngine.XR.Templates.MR
 
                 var plane = new Plane(normal, surfacePose.position);
 
-                var signedToNormal = Mathf.Asin(Mathf.Clamp(Vector3.Dot(pose.forward, normal), -1f, 1f)) * Mathf.Rad2Deg;
-                m_InjectionAngleDegrees = Mathf.Abs(signedToNormal);
+                // Injection angle is measured from the surface plane (0 = parallel to surface, 90 = perpendicular).
+                var alongSurface = Vector3.ProjectOnPlane(pose.forward, normal);
+                if (alongSurface.sqrMagnitude < 0.000001f)
+                    m_InjectionAngleDegrees = 90f;
+                else
+                    m_InjectionAngleDegrees = Vector3.Angle(alongSurface.normalized, pose.forward);
 
                 var signedTip = plane.GetDistanceToPoint(pose.needleTip);
                 var signedBase = plane.GetDistanceToPoint(pose.needleBase);
                 var needleLengthCm = Vector3.Distance(pose.needleTip, pose.needleBase) * 100f;
+
+                // Keep insertion goal strictly below the visible needle length.
+                var clampedNeedleTarget = Mathf.Max(0.06f, needleLengthCm * 0.65f);
+                m_EffectiveInsertionDepthTargetCm = Mathf.Min(m_MinInsertionDepthCm, clampedNeedleTarget, m_MaxInsertionDepthCm);
 
                 float penetrationCm;
                 if (signedTip * signedBase <= 0f)
@@ -760,7 +866,7 @@ namespace UnityEngine.XR.Templates.MR
                     penetrationCm = Mathf.Clamp(depthCandidate, 0f, needleLengthCm);
                 }
 
-                m_CurrentInsertionDepthCm = penetrationCm;
+                m_CurrentInsertionDepthCm = Mathf.Min(penetrationCm, m_MaxInsertionDepthCm);
 
                 if (m_HasPreviousNeedleTip)
                 {
@@ -780,6 +886,7 @@ namespace UnityEngine.XR.Templates.MR
             {
                 m_InjectionAngleDegrees = Vector3.Angle(pose.forward, Vector3.down);
                 m_CurrentInsertionDepthCm = 0f;
+                m_EffectiveInsertionDepthTargetCm = m_MinInsertionDepthCm;
                 m_CurrentLateralStabilityCmPerSec = 0f;
             }
 
@@ -881,7 +988,12 @@ namespace UnityEngine.XR.Templates.MR
                 m_InsertionHoldProgress = 0f;
                 m_InsertionStableHoldProgress = 0f;
                 m_IsDispensePhase = false;
+                m_HasCompletedInsertionDepth = false;
+                m_HasStartedDispensePress = false;
+                m_DispenseStopProgress = 0f;
+                m_DispenseElapsedSeconds = 0f;
                 m_CurrentInsertionDepthCm = 0f;
+                m_EffectiveInsertionDepthTargetCm = m_MinInsertionDepthCm;
                 m_CurrentLateralStabilityCmPerSec = 0f;
                 m_CurrentPlungerPushRateCmPerSec = 0f;
                 m_PlungerTravelNormalized = 0f;
@@ -894,6 +1006,7 @@ namespace UnityEngine.XR.Templates.MR
                 m_RemovalHoldProgress = 0f;
                 m_RemovalLateralSpeedCmPerSec = 0f;
                 m_RemovalLateralSmoothedCmPerSec = 0f;
+                m_HasBeenInsertedDuringRemoval = false;
                 m_HasPreviousNeedleTip = false;
             }
 

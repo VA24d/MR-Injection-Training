@@ -80,24 +80,17 @@ namespace UnityEngine.XR.Templates.MR
             var cam = Camera.main;
             if (cam != null)
             {
-                // Explicitly spawn in front of the camera
-                Vector3 spawnPos = cam.transform.position + cam.transform.forward * 0.5f;
-                // Move slightly below eye level
-                spawnPos.y -= 0.04f;
+                // Match GoalManager default: slightly below eye line, comfortable distance in front of the camera.
+                var spawnPos = cam.transform.TransformPoint(new Vector3(0f, -0.12f, 0.85f));
                 m_CoachingUI.transform.position = spawnPos;
 
-                // Make the panel face the camera perfectly
-                // Transform.LookAt points the +Z towards the camera. 
-                // Unity UI Canvas is read from its -Z face! So we rotate the parent 180 on Y
-                // so the Canvas -Z points to the camera.
-                m_CoachingUI.transform.LookAt(cam.transform);
-                m_CoachingUI.transform.Rotate(0, 180f, 0, Space.Self);
-                
-                // Zero out X and Z rotation so the panel remains upright
-                Vector3 euler = m_CoachingUI.transform.eulerAngles;
-                euler.x = 0f;
-                euler.z = 0f;
-                m_CoachingUI.transform.eulerAngles = euler;
+                var toCamera = cam.transform.position - m_CoachingUI.transform.position;
+                var yawFacing = Vector3.ProjectOnPlane(toCamera, Vector3.up);
+                if (yawFacing.sqrMagnitude > 0.000001f)
+                {
+                    m_CoachingUI.transform.rotation = Quaternion.LookRotation(yawFacing.normalized, Vector3.up) *
+                        Quaternion.Euler(0f, 180f, 0f);
+                }
             }
 
             var lf = m_CoachingUI.GetComponent<LazyFollow>();

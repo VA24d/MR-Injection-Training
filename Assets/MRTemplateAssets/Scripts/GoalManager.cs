@@ -109,6 +109,14 @@ namespace UnityEngine.XR.Templates.MR
         [Tooltip("On startup, attach the coaching UI to head follow. Off = world-anchored at scene pose until ResumeCoachingPanelHeadFollow() or reapply is enabled.")]
         bool m_StartWithCoachingHeadFollow = false;
 
+        [SerializeField]
+        [Tooltip("Spawn coaching panel in front of camera at startup so it is immediately visible.")]
+        Vector3 m_CoachingPanelSpawnOffset = new(0f, -0.12f, 0.85f);
+
+        [SerializeField]
+        [Tooltip("Keep coaching panel yaw-facing the camera each frame.")]
+        bool m_KeepCoachingPanelFacingCamera = true;
+
         [Header("Coaching action buttons")]
         [SerializeField]
         bool m_AddActionButtonsToCoachingMenu = true;
@@ -306,6 +314,7 @@ namespace UnityEngine.XR.Templates.MR
         RectTransform m_CoachingCardRoot;
         Vector2 m_CoachingCardBaseSize;
         bool m_CoachingCardSizeCaptured;
+        bool m_HasPlacedCoachingPanelInView;
 
         Vector3 m_TargetOffset = new(-.5f, -.25f, 1.5f);
 
@@ -314,6 +323,9 @@ namespace UnityEngine.XR.Templates.MR
             ResolveReferences();
             EnsurePaceFeedbackAudio();
             InitializeCoachingUI();
+            PlaceCoachingPanelInFrontOfCamera();
+            ApplyCalibrationOnlyVisualOverlays(
+                m_InjectionTutorial != null ? m_InjectionTutorial.currentStep : SyringeCalibrationButtonBridge.TutorialStep.Start);
             SyncTutorialToUI(force: true);
         }
 
@@ -487,8 +499,60 @@ namespace UnityEngine.XR.Templates.MR
             else
             {
                 m_GoalPanelLazyFollow.positionFollowMode = LazyFollow.PositionFollowMode.None;
-                m_GoalPanelLazyFollow.rotationFollowMode = LazyFollow.RotationFollowMode.None;
+                m_GoalPanelLazyFollow.rotationFollowMode = LazyFollow.RotationFollowMode.LookAtWithWorldUp;
             }
+        }
+
+        Transform GetCoachingPanelTransform()
+        {
+            if (m_GoalPanelLazyFollow != null)
+                return m_GoalPanelLazyFollow.transform;
+
+            return m_CoachingUIParent != null ? m_CoachingUIParent.transform : null;
+        }
+
+        void PlaceCoachingPanelInFrontOfCamera()
+        {
+            if (m_HasPlacedCoachingPanelInView)
+                return;
+
+            if (Camera.main == null)
+                return;
+
+            var panelTransform = GetCoachingPanelTransform();
+            if (panelTransform == null)
+                return;
+
+            var cameraTransform = Camera.main.transform;
+            panelTransform.position = cameraTransform.TransformPoint(m_CoachingPanelSpawnOffset);
+
+            var toCamera = cameraTransform.position - panelTransform.position;
+            var yawFacing = Vector3.ProjectOnPlane(toCamera, Vector3.up);
+            if (yawFacing.sqrMagnitude < 0.000001f)
+                yawFacing = -cameraTransform.forward;
+
+            // World-space UI is authored so its readable side matches a 180° Y offset from LookRotation(toward camera).
+            panelTransform.rotation = Quaternion.LookRotation(yawFacing.normalized, Vector3.up) *
+                Quaternion.Euler(0f, 180f, 0f);
+            m_HasPlacedCoachingPanelInView = true;
+        }
+
+        void KeepCoachingPanelFacingCamera()
+        {
+            if (!m_KeepCoachingPanelFacingCamera || Camera.main == null)
+                return;
+
+            var panelTransform = GetCoachingPanelTransform();
+            if (panelTransform == null)
+                return;
+
+            var toCamera = Camera.main.transform.position - panelTransform.position;
+            var yawFacing = Vector3.ProjectOnPlane(toCamera, Vector3.up);
+            if (yawFacing.sqrMagnitude < 0.000001f)
+                return;
+
+            panelTransform.rotation = Quaternion.LookRotation(yawFacing.normalized, Vector3.up) *
+                Quaternion.Euler(0f, 180f, 0f);
         }
 
         /// <summary>Re-attach the coaching panel to head/camera LazyFollow (e.g. bind to a \"Follow view\" UI button).</summary>
@@ -532,6 +596,11 @@ namespace UnityEngine.XR.Templates.MR
 
         void Update()
         {
+            PlaceCoachingPanelInFrontOfCamera();
+
+            if (m_InjectionTutorial != null)
+                ApplyCalibrationOnlyVisualOverlays(m_InjectionTutorial.currentStep);
+
             SyncTutorialToUI(force: false);
             RefreshActionButtons(force: false);
             ApplyNextStepInteractableState();
@@ -554,6 +623,8 @@ namespace UnityEngine.XR.Templates.MR
 
         void LateUpdate()
         {
+            KeepCoachingPanelFacingCamera();
+
             if (m_InjectionTutorial == null)
                 return;
 
@@ -1256,14 +1327,23 @@ namespace UnityEngine.XR.Templates.MR
                 }
 
                 case SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate:
-                    if (!t.isDispensePhase)
+                    if (!t.hasCompletedInsertionDepth)
                     {
                         return
                             "Insertion\n" +
-                            "Depth: " + t.currentInsertionDepthCm.ToString("F1") + " / " + t.minInsertionDepthCm.ToString("F1") + " cm\n" +
+                            "Depth: " + t.currentInsertionDepthCm.ToString("F2") + " / " + t.effectiveInsertionDepthTargetCm.ToString("F2") + " cm\n" +
                             "Insertion speed: " + t.insertionSpeedCmPerSec.ToString("F1") + " / " + t.targetInsertionSpeedCmPerSec.ToString("F1") + " cm/s\n" +
                             "Stability: " + t.currentLateralStabilityCmPerSec.ToString("F1") + " cm/s lateral\n" +
                             "Lock-in: " + (t.insertionFlowHoldProgressNormalized * 100f).ToString("F0") + "%";
+                    }
+
+                    if (!t.isDispensePhase)
+                    {
+                        return
+                            "Flow Prep\n" +
+                            "Insertion complete\n" +
+                            "Start pressing plunger to begin flow\n" +
+                            "Plunger rate: " + t.currentPlungerPushRateCmPerSec.ToString("F2") + " cm/s";
                     }
 
                     return
@@ -1777,6 +1857,18 @@ namespace UnityEngine.XR.Templates.MR
                 return;
 
             m_GoalPanelLazyFollow.positionFollowMode = LazyFollow.PositionFollowMode.Follow;
+            m_GoalPanelLazyFollow.rotationFollowMode = LazyFollow.RotationFollowMode.LookAtWithWorldUp;
+        }
+
+        void ApplyCalibrationOnlyVisualOverlays(SyringeCalibrationButtonBridge.TutorialStep step)
+        {
+            var showCalibrationOverlays = step == SyringeCalibrationButtonBridge.TutorialStep.Calibration;
+
+            if (m_HandOverlayBridge != null)
+                m_HandOverlayBridge.SetSkeletonVisible(showCalibrationOverlays);
+
+            if (m_Tracker != null)
+                m_Tracker.SetOverlayVisualsEnabled(showCalibrationOverlays);
         }
 
         void SyncTutorialToUI(bool force)
@@ -1848,6 +1940,7 @@ namespace UnityEngine.XR.Templates.MR
                 m_LastTutorialStepForEnvironmentEffects.Value != step)
             {
                 ApplyTutorialEnvironmentEffects();
+                ApplyCalibrationOnlyVisualOverlays(step);
                 m_LastTutorialStepForEnvironmentEffects = step;
             }
 
@@ -2075,14 +2168,20 @@ namespace UnityEngine.XR.Templates.MR
                 }
 
                 case SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate:
-                    if (!m_InjectionTutorial.isDispensePhase)
+                    if (!m_InjectionTutorial.hasCompletedInsertionDepth)
                     {
                         var stable = m_InjectionTutorial.currentLateralStabilityCmPerSec <= m_InjectionTutorial.maxLateralStabilityCmPerSec;
                         var stabilityCue = stable ? "<color=#7CFF6C>Stable</color>" : "<color=#FFF36A>Too shaky - hold still</color>";
                         return "<b><color=#FFF36A>INSERT DEEPER</color></b> until depth reaches target.\nDepth: " +
                                m_InjectionTutorial.currentInsertionDepthCm.ToString("F2") + " / " +
-                               m_InjectionTutorial.minInsertionDepthCm.ToString("F2") + " cm\n" +
+                               m_InjectionTutorial.effectiveInsertionDepthTargetCm.ToString("F2") + " cm\n" +
                                "Stability: " + stabilityCue + " (" + m_InjectionTutorial.currentLateralStabilityCmPerSec.ToString("F1") + " cm/s lateral)";
+                    }
+
+                    if (!m_InjectionTutorial.isDispensePhase)
+                    {
+                        return "<b><color=#7CFF6C>INSERTION DONE</color></b>\nNow press plunger to start flow.\nPlunger rate: " +
+                               m_InjectionTutorial.currentPlungerPushRateCmPerSec.ToString("F2") + " cm/s";
                     }
 
                     {
@@ -2139,10 +2238,6 @@ namespace UnityEngine.XR.Templates.MR
                 return;
             }
 
-            if (m_InjectionTutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed &&
-                !m_InjectionTutorial.removalCheckpointMet)
-                return;
-
             if (m_InjectionTutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.BubbleCheckManual)
                 m_InjectionTutorial.MarkBubbleCheckCompleted();
 
@@ -2186,6 +2281,9 @@ namespace UnityEngine.XR.Templates.MR
 
             if (m_VideoPlayerToggle != null)
                 m_VideoPlayerToggle.isOn = false;
+
+            m_HasPlacedCoachingPanelInView = false;
+            PlaceCoachingPanelInFrontOfCamera();
 
             SyncTutorialToUI(force: true);
         }

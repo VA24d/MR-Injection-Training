@@ -35,10 +35,13 @@ namespace UnityEngine.XR.Templates.MR
 
         [Header("Visibility")]
         [SerializeField, Min(0.005f)]
-        float m_MaxTipPlaneDistance = 0.06f;
+        float m_MaxTipPlaneDistance = 0.035f;
 
         [SerializeField]
         bool m_RequireProjectionInsideSurface = false;
+
+        [SerializeField, Min(0.005f)]
+        float m_AngleModeMaxTipPlaneDistance = 0.04f;
 
         [SerializeField, Min(0f)]
         float m_SurfaceBoundsMargin = 0.008f;
@@ -134,7 +137,7 @@ namespace UnityEngine.XR.Templates.MR
             // Enforce guidance mode for the injection coaching flow.
             m_ShowGuidanceArrows = true;
             m_ShowArc = false;
-            m_ShowAngleText = false;
+            m_ShowAngleText = true;
 
             CreateVisuals();
             ResolveReferences();
@@ -206,16 +209,25 @@ namespace UnityEngine.XR.Templates.MR
             var distanceMeters = Mathf.Abs(signedDistance);
             var effectiveMaxTipPlaneDistance = m_MaxTipPlaneDistance;
             var requireInsideSurface = m_RequireProjectionInsideSurface;
+            var step = m_Tutorial != null ? m_Tutorial.currentStep : SyringeCalibrationButtonBridge.TutorialStep.Start;
 
             if (m_Tutorial != null)
             {
-                var step = m_Tutorial.currentStep;
-                if (step == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle ||
-                    step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate)
+                if (step == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle)
                 {
-                    // Keep guidance visible while aligning and injecting, even if the tip drifts deeper.
-                    effectiveMaxTipPlaneDistance = Mathf.Max(effectiveMaxTipPlaneDistance, 0.12f);
+                    effectiveMaxTipPlaneDistance = Mathf.Max(effectiveMaxTipPlaneDistance, m_AngleModeMaxTipPlaneDistance);
                     requireInsideSurface = false;
+                }
+                else if (step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate)
+                {
+                    // Keep insertion/flow guidance only when syringe is near the site.
+                    effectiveMaxTipPlaneDistance = Mathf.Max(effectiveMaxTipPlaneDistance, 0.03f);
+                    requireInsideSurface = false;
+                }
+                else
+                {
+                    // Overlay is relevant only for angle and insertion/flow steps.
+                    return false;
                 }
             }
 
@@ -299,6 +311,7 @@ namespace UnityEngine.XR.Templates.MR
 
             if (m_DropLine != null)
             {
+                var showAngleLines = m_Tutorial != null && m_Tutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle;
                 m_DropLine.positionCount = 2;
                 m_DropLine.startWidth = m_LineWidth;
                 m_DropLine.endWidth = m_LineWidth;
@@ -306,10 +319,12 @@ namespace UnityEngine.XR.Templates.MR
                 m_DropLine.endColor = m_DropLineColor;
                 m_DropLine.SetPosition(0, data.tip);
                 m_DropLine.SetPosition(1, data.projectedTip);
+                m_DropLine.enabled = showAngleLines;
             }
 
             if (m_PlaneReferenceLine != null)
             {
+                var showAngleLines = m_Tutorial != null && m_Tutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle;
                 m_PlaneReferenceLine.positionCount = 2;
                 m_PlaneReferenceLine.startWidth = m_LineWidth;
                 m_PlaneReferenceLine.endWidth = m_LineWidth;
@@ -318,6 +333,7 @@ namespace UnityEngine.XR.Templates.MR
                 // Keep this anchored at the same point as the tip drop line for a clean intersection.
                 m_PlaneReferenceLine.SetPosition(0, data.projectedTip);
                 m_PlaneReferenceLine.SetPosition(1, data.insertionPoint);
+                m_PlaneReferenceLine.enabled = showAngleLines;
             }
 
             // Keep the legacy arc rendering code available for quick re-enable, but leave it disabled for guidance mode.
@@ -338,10 +354,11 @@ namespace UnityEngine.XR.Templates.MR
                 }
             }
 
-            // Keep the legacy angle text rendering code available for quick re-enable, but leave it disabled for guidance mode.
-            if (false && m_AngleText != null)
+            if (m_AngleText != null)
             {
-                var textVisible = m_ShowAngleText;
+                var isAngleStep = m_Tutorial != null &&
+                                  m_Tutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle;
+                var textVisible = m_ShowAngleText && isAngleStep;
                 m_AngleText.gameObject.SetActive(textVisible);
                 if (textVisible)
                 {
@@ -449,15 +466,25 @@ namespace UnityEngine.XR.Templates.MR
                     }
                     else if (unstable)
                     {
-                        showDot = true;
-                        color = m_GuidanceBadColor;
-                        text = "Hold steady for 1s";
+                        showArrow = true;
+                        // Stabilize cue: small opposite arrow along lateral projection to visibly request less lateral motion.
+                        arrowDir = -Vector3.ProjectOnPlane(data.tipDirection, data.planeNormal);
+                        if (arrowDir.sqrMagnitude < 0.000001f)
+                            arrowDir = data.planeNormal;
+                        text = "Steady hand";
+                    }
+                    else if (m_Tutorial.hasCompletedInsertionDepth)
+                    {
+                        showArrow = true;
+                        arrowDir = data.tipDirection;
+                        text = "Press plunger";
                     }
                     else
                     {
-                        showDot = true;
+                        showArrow = true;
+                        arrowDir = -data.planeNormal;
                         color = m_GuidanceGoodColor;
-                        text = "Insertion stable";
+                        text = "Advance insertion";
                     }
                 }
                 else
@@ -485,7 +512,8 @@ namespace UnityEngine.XR.Templates.MR
                     }
                     else
                     {
-                        showDot = true;
+                        showArrow = true;
+                        arrowDir = data.tipDirection;
                         color = m_GuidanceGoodColor;
                         text = "Maintain dispense";
                     }
@@ -555,16 +583,16 @@ namespace UnityEngine.XR.Templates.MR
             }
 
             if (m_DropLine != null)
-                m_DropLine.enabled = visible;
+                m_DropLine.enabled = visible && m_DropLine.enabled;
 
             if (m_PlaneReferenceLine != null)
-                m_PlaneReferenceLine.enabled = visible;
+                m_PlaneReferenceLine.enabled = visible && m_PlaneReferenceLine.enabled;
 
             if (m_ArcLine != null)
                 m_ArcLine.enabled = visible && m_ShowArc;
 
             if (m_AngleText != null)
-                m_AngleText.gameObject.SetActive(visible && m_ShowAngleText);
+                m_AngleText.gameObject.SetActive(visible && m_ShowAngleText && m_AngleText.gameObject.activeSelf);
 
             if (m_GuidanceArrow != null)
                 m_GuidanceArrow.enabled = visible && m_ShowGuidanceArrows && m_GuidanceArrow.enabled;
