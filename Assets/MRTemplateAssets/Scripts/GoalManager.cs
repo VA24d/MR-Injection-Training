@@ -1242,20 +1242,37 @@ namespace UnityEngine.XR.Templates.MR
                 case SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle:
                 {
                     var r = t.targetInjectionAngleRange;
+                    var angle = t.injectionAngleDegrees;
+                    var inRange = angle >= r.x && angle <= r.y;
+                    var status = inRange
+                        ? "Maintain angle"
+                        : t.angleGuidanceErrorDegrees > 0f ? "Lift syringe higher" : "Lower syringe";
                     return
                         "Angle\n" +
-                        "Current: " + t.injectionAngleDegrees.ToString("F1") + " deg\n" +
+                        "Current: " + angle.ToString("F1") + " deg\n" +
                         "Band: " + r.x.ToString("F0") + " - " + r.y.ToString("F0") + " deg\n" +
+                        "Cue: " + status + "\n" +
                         "Hold: " + (t.angleHoldProgressNormalized * 100f).ToString("F0") + "%";
                 }
 
                 case SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate:
+                    if (!t.isDispensePhase)
+                    {
+                        return
+                            "Insertion\n" +
+                            "Depth: " + t.currentInsertionDepthCm.ToString("F1") + " / " + t.minInsertionDepthCm.ToString("F1") + " cm\n" +
+                            "Insertion speed: " + t.insertionSpeedCmPerSec.ToString("F1") + " / " + t.targetInsertionSpeedCmPerSec.ToString("F1") + " cm/s\n" +
+                            "Stability: " + t.currentLateralStabilityCmPerSec.ToString("F1") + " cm/s lateral\n" +
+                            "Lock-in: " + (t.insertionFlowHoldProgressNormalized * 100f).ToString("F0") + "%";
+                    }
+
                     return
                         "Insertion + Flow\n" +
                         "Pace: " + BuildPaceHudSummaryLine(step) + "\n" +
-                        "Insertion: " + t.insertionSpeedCmPerSec.ToString("F1") + " / " + t.targetInsertionSpeedCmPerSec.ToString("F1") + " cm/s\n" +
+                        "Plunger rate: " + t.currentPlungerPushRateCmPerSec.ToString("F2") + " / " + t.targetDispensePlungerRateCmPerSec.ToString("F2") + " cm/s\n" +
                         "Flow: " + t.flowRateMlPerSec.ToString("F2") + " / " + t.targetFlowRateMlPerSec.ToString("F2") + " ml/s\n" +
-                        "Lock-in: " + (t.insertionFlowHoldProgressNormalized * 100f).ToString("F0") + "%";
+                        "Stability: " + t.currentLateralStabilityCmPerSec.ToString("F1") + " cm/s lateral\n" +
+                        "Plunger: " + (t.plungerTravelNormalized * 100f).ToString("F0") + "%";
 
                 case SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed:
                     return
@@ -1705,6 +1722,11 @@ namespace UnityEngine.XR.Templates.MR
             {
                 case SyringeCalibrationButtonBridge.TutorialStep.FillSyringe:
                     return Mathf.Approximately(m_LastSyncedFillNormalized, m_InjectionTutorial.fillAmountNormalized);
+                case SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle:
+                case SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate:
+                case SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed:
+                    // These steps rely on live motion metrics and should update every frame.
+                    return false;
                 case SyringeCalibrationButtonBridge.TutorialStep.Calibration:
                     var taps = m_Tracker != null ? m_Tracker.calibrationTapCount : 0;
                     return m_LastSyncedCalibrationTaps == taps;
@@ -1787,15 +1809,21 @@ namespace UnityEngine.XR.Templates.MR
                 if (m_CoachingBodyText != null)
                 {
                     m_CoachingBodyText.text = stepBody;
+                    m_CoachingBodyText.richText = true;
                     m_CoachingBodyText.textWrappingMode = TextWrappingModes.Normal;
                     if (step == SyringeCalibrationButtonBridge.TutorialStep.FinalScore ||
+                        step == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle ||
                         step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate ||
                         step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed)
                         m_CoachingBodyText.overflowMode = TextOverflowModes.Overflow;
+
+                    m_CoachingBodyText.color = Color.white;
                 }
 
-                ApplyTextToActiveStepPanel(activePanelIndex, stepTitle, stepBody, step);
             }
+
+            // Keep per-step panel copy in sync even if top-level coaching text sync is disabled.
+            ApplyTextToActiveStepPanel(activePanelIndex, stepTitle, stepBody, step);
 
             var showLegacyStepButton = !m_AddActionButtonsToCoachingMenu;
             // Always drive the primary blue poke label when wired — action-bar mode still leaves "Continue/Next" visible without text otherwise.
@@ -1949,11 +1977,15 @@ namespace UnityEngine.XR.Templates.MR
             if (bodyTmp != null)
             {
                 bodyTmp.text = body;
+                bodyTmp.richText = true;
                 bodyTmp.textWrappingMode = TextWrappingModes.Normal;
                 if (step == SyringeCalibrationButtonBridge.TutorialStep.FinalScore ||
+                    step == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle ||
                     step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate ||
                     step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed)
                     bodyTmp.overflowMode = TextOverflowModes.Overflow;
+
+                bodyTmp.color = Color.white;
             }
         }
 
@@ -2031,10 +2063,36 @@ namespace UnityEngine.XR.Templates.MR
                     return "Clean the injection site on your placed surface with an alcohol wipe: use a spiral motion from center outward, allow the skin to air-dry before needling. Tap Next when you have finished the wipe step. Demo Video is available for technique reference.";
 
                 case SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle:
-                    return "Align and hold the injection angle target.";
+                {
+                    var r = m_InjectionTutorial.targetInjectionAngleRange;
+                    var angle = m_InjectionTutorial.injectionAngleDegrees;
+                    var secLeft = m_InjectionTutorial.angleHoldSecondsRemaining;
+                    if (angle < r.x)
+                        return "<b><color=#FFF36A>LIFT HIGHER</color></b> to reach <b>" + r.x.ToString("F0") + "-" + r.y.ToString("F0") + " deg</b>.\nCurrent: " + angle.ToString("F1") + " deg.\nHold timer starts when inside range.";
+                    if (angle > r.y)
+                        return "<b><color=#FFF36A>LOWER ANGLE</color></b> to reach <b>" + r.x.ToString("F0") + "-" + r.y.ToString("F0") + " deg</b>.\nCurrent: " + angle.ToString("F1") + " deg.\nHold timer starts when inside range.";
+                    return "<b><color=#7CFF6C>MAINTAIN ANGLE</color></b>\nTarget: " + r.x.ToString("F0") + "-" + r.y.ToString("F0") + " deg\nCountdown: <b>" + secLeft.ToString("F1") + "s</b>";
+                }
 
                 case SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate:
-                    return "Maintain insertion speed and flow rate targets.";
+                    if (!m_InjectionTutorial.isDispensePhase)
+                    {
+                        var stable = m_InjectionTutorial.currentLateralStabilityCmPerSec <= m_InjectionTutorial.maxLateralStabilityCmPerSec;
+                        var stabilityCue = stable ? "<color=#7CFF6C>Stable</color>" : "<color=#FFF36A>Too shaky - hold still</color>";
+                        return "<b><color=#FFF36A>INSERT DEEPER</color></b> until depth reaches target.\nDepth: " +
+                               m_InjectionTutorial.currentInsertionDepthCm.ToString("F2") + " / " +
+                               m_InjectionTutorial.minInsertionDepthCm.ToString("F2") + " cm\n" +
+                               "Stability: " + stabilityCue + " (" + m_InjectionTutorial.currentLateralStabilityCmPerSec.ToString("F1") + " cm/s lateral)";
+                    }
+
+                    {
+                        var stable = m_InjectionTutorial.currentLateralStabilityCmPerSec <= m_InjectionTutorial.maxLateralStabilityCmPerSec;
+                        var stabilityCue = stable ? "<color=#7CFF6C>Stable</color>" : "<color=#FFF36A>Too shaky - hold still</color>";
+                        return "<b><color=#7CFF6C>PUSH PLUNGER</color></b> smoothly.\nPlunger: " +
+                               (m_InjectionTutorial.plungerTravelNormalized * 100f).ToString("F0") + "%\n" +
+                               "Rate: " + m_InjectionTutorial.currentPlungerPushRateCmPerSec.ToString("F2") + " cm/s\n" +
+                               "Stability: " + stabilityCue;
+                    }
 
                 case SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed:
                     return "Withdraw the needle at the target speed while keeping lateral motion low (stability). The checkpoint fills only when both match; Next stays disabled until it completes or the run advances automatically.";

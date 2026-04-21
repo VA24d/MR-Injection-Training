@@ -60,6 +60,12 @@ namespace UnityEngine.XR.Templates.MR
         SyringeOverlayTracker m_Tracker;
 
         [SerializeField]
+        SurfaceSelectionTool m_SurfaceSelectionTool;
+
+        [SerializeField]
+        SyringePlaneAngleOverlay m_PlaneAngleOverlay;
+
+        [SerializeField]
         HandOverlaySkeletonToggleBridge m_HandOverlayBridge;
 
         [Header("Stub behavior")]
@@ -88,16 +94,46 @@ namespace UnityEngine.XR.Templates.MR
         float m_CleanSurfaceManualFallbackDelay = 2.5f;
 
         [SerializeField]
+        Vector2 m_DefaultInjectionAngleRange = new Vector2(25f, 55f);
+
+        [SerializeField]
         Vector2 m_TargetInjectionAngleRange = new Vector2(25f, 55f);
 
+        [SerializeField]
+        Vector2 m_IntramuscularAngleRange = new Vector2(80f, 95f);
+
+        [SerializeField]
+        Vector2 m_SubcutaneousAngleRange = new Vector2(35f, 50f);
+
+        [SerializeField]
+        Vector2 m_IntradermalAngleRange = new Vector2(8f, 18f);
+
+        [SerializeField]
+        Vector2 m_IntravenousAngleRange = new Vector2(20f, 35f);
+
         [SerializeField, Min(0.1f)]
-        float m_AngleHoldSeconds = 0.8f;
+        float m_AngleHoldSeconds = 3f;
 
         [SerializeField, Min(0.1f)]
         float m_TargetInsertionSpeedCmPerSec = 3.5f;
 
         [SerializeField, Min(0.1f)]
         float m_TargetFlowRateMlPerSec = 0.6f;
+
+        [SerializeField, Min(0.1f)]
+        float m_MinInsertionDepthCm = 0.25f;
+
+        [SerializeField, Min(0.1f)]
+        float m_MaxLateralStabilityCmPerSec = 6f;
+
+        [SerializeField, Min(0.1f)]
+        float m_InsertedStabilityHoldSeconds = 0.45f;
+
+        [SerializeField, Min(0.1f)]
+        float m_TargetDispensePlungerRateCmPerSec = 1.6f;
+
+        [SerializeField, Min(0.01f)]
+        float m_MinPlungerTravelToCompleteCm = 0.8f;
 
         [SerializeField, Min(0.1f)]
         float m_TargetRemovalSpeedCmPerSec = 4.5f;
@@ -166,11 +202,33 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField]
         float m_StepElapsedSeconds;
 
+        [SerializeField]
+        bool m_IsDispensePhase;
+
+        [SerializeField]
+        float m_CurrentInsertionDepthCm;
+
+        [SerializeField]
+        float m_CurrentLateralStabilityCmPerSec;
+
+        [SerializeField]
+        float m_CurrentPlungerPushRateCmPerSec;
+
+        [SerializeField]
+        float m_PlungerTravelNormalized;
+
+        [SerializeField]
+        float m_AngleGuidanceErrorDegrees;
+
         float m_AngleHoldProgress;
         float m_InsertionHoldProgress;
         float m_RemovalHoldProgress;
         Vector3 m_PreviousNeedleTip;
+        Vector3 m_PlungerWorldPrev;
         bool m_HasPreviousNeedleTip;
+        float m_InsertionStableHoldProgress;
+        float m_InitialPlungerToWingsDistanceCm;
+        bool m_HasInitialPlungerDistance;
 
         public TutorialStep currentStep => m_CurrentStep;
         public bool isTutorialRunning => m_IsTutorialRunning;
@@ -211,11 +269,22 @@ namespace UnityEngine.XR.Templates.MR
                 ? Mathf.Clamp(Mathf.RoundToInt(removalHoldProgressNormalized * 100f), 0, 100)
                 : -1;
 
-        public Vector2 targetInjectionAngleRange => m_TargetInjectionAngleRange;
+        public Vector2 targetInjectionAngleRange => GetTargetInjectionAngleRangeForSelectedType();
         public float targetInsertionSpeedCmPerSec => m_TargetInsertionSpeedCmPerSec;
         public float targetFlowRateMlPerSec => m_TargetFlowRateMlPerSec;
         public float targetRemovalSpeedCmPerSec => m_TargetRemovalSpeedCmPerSec;
         public float targetFillAmountNormalized => m_TargetFillAmount;
+
+        public bool isDispensePhase => m_IsDispensePhase;
+        public float currentInsertionDepthCm => m_CurrentInsertionDepthCm;
+        public float currentLateralStabilityCmPerSec => m_CurrentLateralStabilityCmPerSec;
+        public float currentPlungerPushRateCmPerSec => m_CurrentPlungerPushRateCmPerSec;
+        public float plungerTravelNormalized => m_PlungerTravelNormalized;
+        public float angleGuidanceErrorDegrees => m_AngleGuidanceErrorDegrees;
+        public float angleHoldSecondsRemaining => Mathf.Max(0f, m_AngleHoldSeconds - m_AngleHoldProgress);
+        public float minInsertionDepthCm => m_MinInsertionDepthCm;
+        public float maxLateralStabilityCmPerSec => m_MaxLateralStabilityCmPerSec;
+        public float targetDispensePlungerRateCmPerSec => m_TargetDispensePlungerRateCmPerSec;
 
         /// <summary>
         /// Multi-line summary for the final score coaching panel (category points + total).
@@ -279,6 +348,14 @@ namespace UnityEngine.XR.Templates.MR
             m_RemovalLateralSmoothedCmPerSec = 0f;
             m_HasPreviousNeedleTip = false;
             m_LastScoreBreakdown = default;
+            m_IsDispensePhase = false;
+            m_CurrentInsertionDepthCm = 0f;
+            m_CurrentLateralStabilityCmPerSec = 0f;
+            m_CurrentPlungerPushRateCmPerSec = 0f;
+            m_PlungerTravelNormalized = 0f;
+            m_AngleGuidanceErrorDegrees = 0f;
+            m_InsertionStableHoldProgress = 0f;
+            m_HasInitialPlungerDistance = false;
 
             GoToStep(TutorialStep.Start);
         }
@@ -405,6 +482,12 @@ namespace UnityEngine.XR.Templates.MR
             if (m_Tracker == null)
                 m_Tracker = GetComponent<SyringeOverlayTracker>() ?? FindAnyObjectByType<SyringeOverlayTracker>();
 
+            if (m_SurfaceSelectionTool == null)
+                m_SurfaceSelectionTool = GetComponent<SurfaceSelectionTool>() ?? FindAnyObjectByType<SurfaceSelectionTool>();
+
+            if (m_PlaneAngleOverlay == null)
+                m_PlaneAngleOverlay = GetComponent<SyringePlaneAngleOverlay>() ?? FindAnyObjectByType<SyringePlaneAngleOverlay>();
+
             if (m_HandOverlayBridge == null)
                 m_HandOverlayBridge = GetComponent<HandOverlaySkeletonToggleBridge>() ?? FindAnyObjectByType<HandOverlaySkeletonToggleBridge>();
         }
@@ -523,15 +606,24 @@ namespace UnityEngine.XR.Templates.MR
 
         void TickInjectionAngleStep()
         {
+            var angleRange = GetTargetInjectionAngleRangeForSelectedType();
             var hasTracking = TryUpdatePoseMetrics();
             if (!hasTracking && m_AutoAdvanceStub)
             {
-                m_InjectionAngleDegrees = Mathf.Lerp(m_InjectionAngleDegrees, 40f, 4f * Time.deltaTime);
+                var target = 0.5f * (angleRange.x + angleRange.y);
+                m_InjectionAngleDegrees = Mathf.Lerp(m_InjectionAngleDegrees, target, 4f * Time.deltaTime);
             }
 
             var isWithinRange =
-                m_InjectionAngleDegrees >= m_TargetInjectionAngleRange.x &&
-                m_InjectionAngleDegrees <= m_TargetInjectionAngleRange.y;
+                m_InjectionAngleDegrees >= angleRange.x &&
+                m_InjectionAngleDegrees <= angleRange.y;
+
+            if (m_InjectionAngleDegrees < angleRange.x)
+                m_AngleGuidanceErrorDegrees = angleRange.x - m_InjectionAngleDegrees;
+            else if (m_InjectionAngleDegrees > angleRange.y)
+                m_AngleGuidanceErrorDegrees = angleRange.y - m_InjectionAngleDegrees;
+            else
+                m_AngleGuidanceErrorDegrees = 0f;
 
             if (isWithinRange)
                 m_AngleHoldProgress += Time.deltaTime;
@@ -547,20 +639,57 @@ namespace UnityEngine.XR.Templates.MR
             var hasTracking = TryUpdatePoseMetrics();
             if (!hasTracking && m_AutoAdvanceStub)
             {
-                m_InsertionSpeedCmPerSec = Mathf.Lerp(m_InsertionSpeedCmPerSec, m_TargetInsertionSpeedCmPerSec, 3f * Time.deltaTime);
-                m_FlowRateMlPerSec = Mathf.Lerp(m_FlowRateMlPerSec, m_TargetFlowRateMlPerSec, 3f * Time.deltaTime);
+                if (!m_IsDispensePhase)
+                {
+                    m_InsertionSpeedCmPerSec = Mathf.Lerp(m_InsertionSpeedCmPerSec, m_TargetInsertionSpeedCmPerSec, 3f * Time.deltaTime);
+                    m_CurrentInsertionDepthCm = Mathf.Lerp(m_CurrentInsertionDepthCm, m_MinInsertionDepthCm + 0.2f, 2.5f * Time.deltaTime);
+                    m_CurrentLateralStabilityCmPerSec = Mathf.Lerp(m_CurrentLateralStabilityCmPerSec, 0.6f, 2.5f * Time.deltaTime);
+                    m_InsertionStableHoldProgress += Time.deltaTime;
+                    if (m_InsertionStableHoldProgress >= m_InsertedStabilityHoldSeconds)
+                        m_IsDispensePhase = true;
+                }
+                else
+                {
+                    m_CurrentPlungerPushRateCmPerSec = Mathf.Lerp(m_CurrentPlungerPushRateCmPerSec, m_TargetDispensePlungerRateCmPerSec, 3f * Time.deltaTime);
+                    m_FlowRateMlPerSec = Mathf.Lerp(m_FlowRateMlPerSec, m_TargetFlowRateMlPerSec, 3f * Time.deltaTime);
+                    m_PlungerTravelNormalized = Mathf.Clamp01(m_PlungerTravelNormalized + Time.deltaTime * 0.4f);
+                }
             }
 
-            var insertionOk = Mathf.Abs(m_InsertionSpeedCmPerSec - m_TargetInsertionSpeedCmPerSec) <= 1.5f;
-            var flowOk = Mathf.Abs(m_FlowRateMlPerSec - m_TargetFlowRateMlPerSec) <= 0.25f;
+            if (!m_IsDispensePhase)
+            {
+                var insertedEnough = m_CurrentInsertionDepthCm >= m_MinInsertionDepthCm;
+                var stableEnough = m_CurrentLateralStabilityCmPerSec <= m_MaxLateralStabilityCmPerSec;
+                var movingForwardEnough = m_InsertionSpeedCmPerSec >= 0.15f;
 
-            if (insertionOk && flowOk)
-                m_InsertionHoldProgress += Time.deltaTime;
+                if (insertedEnough && stableEnough && movingForwardEnough)
+                    m_InsertionStableHoldProgress += Time.deltaTime;
+                else
+                    m_InsertionStableHoldProgress = 0f;
+
+                m_InsertionHoldProgress = Mathf.Clamp01(m_InsertionStableHoldProgress / Mathf.Max(0.01f, m_InsertedStabilityHoldSeconds)) * m_SpeedHoldSeconds;
+
+                if (m_InsertionStableHoldProgress >= m_InsertedStabilityHoldSeconds)
+                {
+                    m_IsDispensePhase = true;
+                    m_InsertionHoldProgress = 0f;
+                }
+            }
             else
-                m_InsertionHoldProgress = 0f;
+            {
+                var flowOk = Mathf.Abs(m_FlowRateMlPerSec - m_TargetFlowRateMlPerSec) <= 0.22f;
+                var plungerRateOk = Mathf.Abs(m_CurrentPlungerPushRateCmPerSec - m_TargetDispensePlungerRateCmPerSec) <= 0.8f;
+                var stableEnough = m_CurrentLateralStabilityCmPerSec <= m_MaxLateralStabilityCmPerSec;
 
-            if (m_InsertionHoldProgress >= m_SpeedHoldSeconds)
-                GoToStep(TutorialStep.RemoveSpeed);
+                if (flowOk && plungerRateOk && stableEnough)
+                    m_InsertionHoldProgress += Time.deltaTime;
+                else
+                    m_InsertionHoldProgress = Mathf.Max(0f, m_InsertionHoldProgress - Time.deltaTime * 0.8f);
+
+                var plungerComplete = m_PlungerTravelNormalized >= 0.98f;
+                if (plungerComplete)
+                    GoToStep(TutorialStep.RemoveSpeed);
+            }
         }
 
         void TickRemovalSpeedStep()
@@ -594,8 +723,65 @@ namespace UnityEngine.XR.Templates.MR
                 return false;
 
             var dt = Mathf.Max(Time.deltaTime, 0.0001f);
+            Pose surfacePose = default;
+            var hasSurface = m_SurfaceSelectionTool != null &&
+                             m_SurfaceSelectionTool.TryGetPlacedSurface(out surfacePose, out _);
 
-            m_InjectionAngleDegrees = Vector3.Angle(pose.forward, Vector3.down);
+            if (hasSurface)
+            {
+                var normal = surfacePose.up;
+                if (normal.sqrMagnitude < 0.000001f)
+                    normal = Vector3.up;
+                else
+                    normal.Normalize();
+
+                var plane = new Plane(normal, surfacePose.position);
+
+                var signedToNormal = Mathf.Asin(Mathf.Clamp(Vector3.Dot(pose.forward, normal), -1f, 1f)) * Mathf.Rad2Deg;
+                m_InjectionAngleDegrees = Mathf.Abs(signedToNormal);
+
+                var signedTip = plane.GetDistanceToPoint(pose.needleTip);
+                var signedBase = plane.GetDistanceToPoint(pose.needleBase);
+                var needleLengthCm = Vector3.Distance(pose.needleTip, pose.needleBase) * 100f;
+
+                float penetrationCm;
+                if (signedTip * signedBase <= 0f)
+                {
+                    // Needle segment crosses the plane; depth is bounded by the visible needle length.
+                    penetrationCm = Mathf.Min(Mathf.Abs(signedTip) * 100f, needleLengthCm);
+                }
+                else
+                {
+                    var inwardSign = Mathf.Sign(-Vector3.Dot(pose.forward, normal));
+                    if (Mathf.Approximately(inwardSign, 0f))
+                        inwardSign = -1f;
+
+                    var depthCandidate = inwardSign * signedTip * 100f;
+                    penetrationCm = Mathf.Clamp(depthCandidate, 0f, needleLengthCm);
+                }
+
+                m_CurrentInsertionDepthCm = penetrationCm;
+
+                if (m_HasPreviousNeedleTip)
+                {
+                    var needleVelocity = (pose.needleTip - m_PreviousNeedleTip) / dt;
+                    var inwardAxis = -normal * Mathf.Sign(-Vector3.Dot(pose.forward, normal));
+                    if (inwardAxis.sqrMagnitude < 0.000001f)
+                        inwardAxis = -normal;
+                    inwardAxis.Normalize();
+                    var axialCmPerSec = Vector3.Dot(needleVelocity, inwardAxis) * 100f;
+                    var lateralCmPerSec = Vector3.ProjectOnPlane(needleVelocity, inwardAxis).magnitude * 100f;
+
+                    m_InsertionSpeedCmPerSec = Mathf.Max(0f, axialCmPerSec);
+                    m_CurrentLateralStabilityCmPerSec = lateralCmPerSec;
+                }
+            }
+            else
+            {
+                m_InjectionAngleDegrees = Vector3.Angle(pose.forward, Vector3.down);
+                m_CurrentInsertionDepthCm = 0f;
+                m_CurrentLateralStabilityCmPerSec = 0f;
+            }
 
             if (m_HasPreviousNeedleTip)
             {
@@ -604,8 +790,8 @@ namespace UnityEngine.XR.Templates.MR
 
                 if (m_CurrentStep == TutorialStep.InsertionSpeedFlowRate)
                 {
-                    m_InsertionSpeedCmPerSec = Mathf.Max(0f, forwardSpeedCmPerSec);
-                    m_FlowRateMlPerSec = Mathf.Clamp(m_InsertionSpeedCmPerSec * 0.15f, 0f, 1.5f);
+                    if (!hasSurface)
+                        m_InsertionSpeedCmPerSec = Mathf.Max(0f, forwardSpeedCmPerSec);
                 }
                 else if (m_CurrentStep == TutorialStep.RemoveSpeed)
                 {
@@ -616,8 +802,29 @@ namespace UnityEngine.XR.Templates.MR
                 }
             }
 
+            var plungerToWingsCm = Vector3.Distance(pose.plunger, pose.wingsCenter) * 100f;
+            if (!m_HasInitialPlungerDistance && m_CurrentStep == TutorialStep.InsertionSpeedFlowRate)
+            {
+                m_InitialPlungerToWingsDistanceCm = plungerToWingsCm;
+                m_HasInitialPlungerDistance = true;
+            }
+
+            if (m_HasPreviousNeedleTip)
+            {
+                var plungerVelocity = (pose.plunger - m_PlungerWorldPrev) / dt;
+                m_CurrentPlungerPushRateCmPerSec = Mathf.Max(0f, Vector3.Dot(plungerVelocity, pose.forward) * 100f);
+            }
+
+            if (m_HasInitialPlungerDistance)
+            {
+                var travelCm = Mathf.Max(0f, m_InitialPlungerToWingsDistanceCm - plungerToWingsCm);
+                m_PlungerTravelNormalized = Mathf.Clamp01(travelCm / Mathf.Max(0.01f, m_MinPlungerTravelToCompleteCm));
+                m_FlowRateMlPerSec = Mathf.Clamp(m_CurrentPlungerPushRateCmPerSec * 0.38f, 0f, 2.5f);
+            }
+
             m_PreviousNeedleTip = pose.needleTip;
             m_HasPreviousNeedleTip = true;
+            m_PlungerWorldPrev = pose.plunger;
             return true;
         }
 
@@ -670,7 +877,17 @@ namespace UnityEngine.XR.Templates.MR
                 m_AngleHoldProgress = 0f;
 
             if (nextStep == TutorialStep.InsertionSpeedFlowRate)
+            {
                 m_InsertionHoldProgress = 0f;
+                m_InsertionStableHoldProgress = 0f;
+                m_IsDispensePhase = false;
+                m_CurrentInsertionDepthCm = 0f;
+                m_CurrentLateralStabilityCmPerSec = 0f;
+                m_CurrentPlungerPushRateCmPerSec = 0f;
+                m_PlungerTravelNormalized = 0f;
+                m_HasInitialPlungerDistance = false;
+                m_HasPreviousNeedleTip = false;
+            }
 
             if (nextStep == TutorialStep.RemoveSpeed)
             {
@@ -683,7 +900,28 @@ namespace UnityEngine.XR.Templates.MR
             if (nextStep == TutorialStep.FinalScore)
                 FinalizeScore();
 
+            if (m_PlaneAngleOverlay != null)
+                m_PlaneAngleOverlay.SetGuidanceStep(nextStep);
+
             Debug.Log($"[Injection Tutorial Stub] Step: {nextStep}", this);
+        }
+
+        Vector2 GetTargetInjectionAngleRangeForSelectedType()
+        {
+            var range = m_SelectedInjectionType switch
+            {
+                InjectionType.Intramuscular => m_IntramuscularAngleRange,
+                InjectionType.Subcutaneous => m_SubcutaneousAngleRange,
+                InjectionType.Intradermal => m_IntradermalAngleRange,
+                InjectionType.Intravenous => m_IntravenousAngleRange,
+                _ => m_DefaultInjectionAngleRange,
+            };
+
+            if (range.x > range.y)
+                (range.x, range.y) = (range.y, range.x);
+
+            m_TargetInjectionAngleRange = range;
+            return range;
         }
 
 #if UNITY_EDITOR

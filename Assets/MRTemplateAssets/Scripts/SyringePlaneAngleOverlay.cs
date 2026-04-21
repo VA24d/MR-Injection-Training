@@ -28,14 +28,17 @@ namespace UnityEngine.XR.Templates.MR
         SurfaceSelectionTool m_SurfaceSelectionTool;
 
         [SerializeField]
+        SyringeCalibrationButtonBridge m_Tutorial;
+
+        [SerializeField]
         Camera m_MainCamera;
 
         [Header("Visibility")]
         [SerializeField, Min(0.005f)]
-        float m_MaxTipPlaneDistance = 0.03f;
+        float m_MaxTipPlaneDistance = 0.06f;
 
         [SerializeField]
-        bool m_RequireProjectionInsideSurface = true;
+        bool m_RequireProjectionInsideSurface = false;
 
         [SerializeField, Min(0f)]
         float m_SurfaceBoundsMargin = 0.008f;
@@ -62,6 +65,31 @@ namespace UnityEngine.XR.Templates.MR
         [Header("Angle text")]
         [SerializeField]
         bool m_ShowAngleText = true;
+
+        [Header("Guidance overlay")]
+        [SerializeField]
+        bool m_ShowGuidanceArrows = true;
+
+        [SerializeField]
+        Color m_GuidanceGoodColor = new Color(0.15f, 1f, 0.25f, 0.95f);
+
+        [SerializeField]
+        Color m_GuidanceBadColor = new Color(1f, 0.95f, 0.1f, 1f);
+
+        [SerializeField, Min(0.001f)]
+        float m_GuidanceArrowLength = 0.09f;
+
+        [SerializeField, Min(0.0005f)]
+        float m_GuidanceArrowHeadLength = 0.015f;
+
+        [SerializeField, Min(0.0002f)]
+        float m_GuidanceArrowWidth = 0.006f;
+
+        [SerializeField, Min(0.0005f)]
+        float m_GuidanceDotSize = 0.007f;
+
+        [SerializeField, Min(0.0005f)]
+        float m_GuidanceTextCharacterSize = 0.0038f;
 
         [SerializeField]
         Color m_TextColor = Color.white;
@@ -94,10 +122,20 @@ namespace UnityEngine.XR.Templates.MR
         LineRenderer m_PlaneReferenceLine;
         LineRenderer m_ArcLine;
         TextMesh m_AngleText;
+        LineRenderer m_GuidanceArrow;
+        Transform m_GuidanceDot;
+        TextMesh m_GuidanceText;
         Material m_RuntimeLineMaterial;
+        Material m_RuntimeGuidanceMaterial;
+        SyringeCalibrationButtonBridge.TutorialStep m_GuidanceStep;
 
         void Awake()
         {
+            // Enforce guidance mode for the injection coaching flow.
+            m_ShowGuidanceArrows = true;
+            m_ShowArc = false;
+            m_ShowAngleText = false;
+
             CreateVisuals();
             ResolveReferences();
         }
@@ -119,6 +157,8 @@ namespace UnityEngine.XR.Templates.MR
         {
             if (m_RuntimeLineMaterial != null)
                 Destroy(m_RuntimeLineMaterial);
+            if (m_RuntimeGuidanceMaterial != null)
+                Destroy(m_RuntimeGuidanceMaterial);
         }
 
         void ResolveReferences()
@@ -128,6 +168,9 @@ namespace UnityEngine.XR.Templates.MR
 
             if (m_SurfaceSelectionTool == null)
                 m_SurfaceSelectionTool = GetComponent<SurfaceSelectionTool>() ?? FindAnyObjectByType<SurfaceSelectionTool>();
+
+            if (m_Tutorial == null)
+                m_Tutorial = GetComponent<SyringeCalibrationButtonBridge>() ?? FindAnyObjectByType<SyringeCalibrationButtonBridge>();
 
             if (m_MainCamera == null)
                 m_MainCamera = Camera.main;
@@ -161,11 +204,26 @@ namespace UnityEngine.XR.Templates.MR
             var tip = syringePose.needleTip;
             var signedDistance = plane.GetDistanceToPoint(tip);
             var distanceMeters = Mathf.Abs(signedDistance);
-            if (distanceMeters > m_MaxTipPlaneDistance)
+            var effectiveMaxTipPlaneDistance = m_MaxTipPlaneDistance;
+            var requireInsideSurface = m_RequireProjectionInsideSurface;
+
+            if (m_Tutorial != null)
+            {
+                var step = m_Tutorial.currentStep;
+                if (step == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle ||
+                    step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate)
+                {
+                    // Keep guidance visible while aligning and injecting, even if the tip drifts deeper.
+                    effectiveMaxTipPlaneDistance = Mathf.Max(effectiveMaxTipPlaneDistance, 0.12f);
+                    requireInsideSurface = false;
+                }
+            }
+
+            if (distanceMeters > effectiveMaxTipPlaneDistance)
                 return false;
 
             var projectedTip = tip - planeNormal * signedDistance;
-            if (m_RequireProjectionInsideSurface &&
+            if (requireInsideSurface &&
                 !IsPointInsideSurfaceBounds(projectedTip, surfacePose, surfaceSizeMeters, m_SurfaceBoundsMargin))
             {
                 return false;
@@ -180,7 +238,7 @@ namespace UnityEngine.XR.Templates.MR
                 insertionPoint = tip + syringeDirection * t;
             }
 
-            if (m_RequireProjectionInsideSurface &&
+            if (requireInsideSurface &&
                 !IsPointInsideSurfaceBounds(insertionPoint, surfacePose, surfaceSizeMeters, m_SurfaceBoundsMargin))
             {
                 return false;
@@ -262,7 +320,8 @@ namespace UnityEngine.XR.Templates.MR
                 m_PlaneReferenceLine.SetPosition(1, data.insertionPoint);
             }
 
-            if (m_ArcLine != null)
+            // Keep the legacy arc rendering code available for quick re-enable, but leave it disabled for guidance mode.
+            if (false && m_ArcLine != null)
             {
                 var pointCount = segments + 1;
                 m_ArcLine.positionCount = pointCount;
@@ -279,7 +338,8 @@ namespace UnityEngine.XR.Templates.MR
                 }
             }
 
-            if (m_AngleText != null)
+            // Keep the legacy angle text rendering code available for quick re-enable, but leave it disabled for guidance mode.
+            if (false && m_AngleText != null)
             {
                 var textVisible = m_ShowAngleText;
                 m_AngleText.gameObject.SetActive(textVisible);
@@ -327,7 +387,161 @@ namespace UnityEngine.XR.Templates.MR
                 }
             }
 
+            DrawGuidanceOverlay(data);
             SetOverlayVisible(true);
+        }
+
+        public void SetGuidanceStep(SyringeCalibrationButtonBridge.TutorialStep step)
+        {
+            m_GuidanceStep = step;
+        }
+
+        void DrawGuidanceOverlay(OverlayData data)
+        {
+            if (!m_ShowGuidanceArrows || m_Tutorial == null || m_GuidanceArrow == null || m_GuidanceText == null || m_GuidanceDot == null)
+                return;
+
+            // Source the active guidance step from tutorial state each frame.
+            m_GuidanceStep = m_Tutorial.currentStep;
+
+            var showArrow = false;
+            var showDot = false;
+            var color = m_GuidanceBadColor;
+            var text = string.Empty;
+            var basePoint = data.insertionPoint + data.planeNormal * 0.025f;
+            var arrowDir = data.planeNormal;
+
+            if (m_GuidanceStep == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle)
+            {
+                var range = m_Tutorial.targetInjectionAngleRange;
+                var angle = m_Tutorial.injectionAngleDegrees;
+                var inRange = angle >= range.x && angle <= range.y;
+
+                if (inRange)
+                {
+                    showDot = true;
+                    color = m_GuidanceGoodColor;
+                    text = "Maintain angle";
+                    if (m_Tutorial.angleHoldSecondsRemaining > 0.01f)
+                        text += " (" + m_Tutorial.angleHoldSecondsRemaining.ToString("F1") + "s)";
+                }
+                else
+                {
+                    showArrow = true;
+                    var needHigher = m_Tutorial.angleGuidanceErrorDegrees > 0f;
+                    arrowDir = needHigher ? data.planeNormal : -data.planeNormal;
+                    text = needHigher ? "Lift syringe higher" : "Lower syringe";
+                    text += " (target " + range.x.ToString("F0") + "-" + range.y.ToString("F0") + " deg)";
+                }
+            }
+            else if (m_GuidanceStep == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate)
+            {
+                if (!m_Tutorial.isDispensePhase)
+                {
+                    var needDepth = m_Tutorial.currentInsertionDepthCm < m_Tutorial.minInsertionDepthCm;
+                    var unstable = m_Tutorial.currentLateralStabilityCmPerSec > m_Tutorial.maxLateralStabilityCmPerSec;
+
+                    if (needDepth)
+                    {
+                        showArrow = true;
+                        arrowDir = -data.planeNormal;
+                        text = "Insert deeper";
+                    }
+                    else if (unstable)
+                    {
+                        showDot = true;
+                        color = m_GuidanceBadColor;
+                        text = "Hold steady for 1s";
+                    }
+                    else
+                    {
+                        showDot = true;
+                        color = m_GuidanceGoodColor;
+                        text = "Insertion stable";
+                    }
+                }
+                else
+                {
+                    var flowDelta = m_Tutorial.currentPlungerPushRateCmPerSec - m_Tutorial.targetDispensePlungerRateCmPerSec;
+                    var unstable = m_Tutorial.currentLateralStabilityCmPerSec > m_Tutorial.maxLateralStabilityCmPerSec;
+
+                    if (unstable)
+                    {
+                        showDot = true;
+                        color = m_GuidanceBadColor;
+                        text = "Keep syringe steady";
+                    }
+                    else if (flowDelta < -0.8f)
+                    {
+                        showArrow = true;
+                        arrowDir = data.tipDirection;
+                        text = "Push plunger faster";
+                    }
+                    else if (flowDelta > 0.8f)
+                    {
+                        showArrow = true;
+                        arrowDir = -data.tipDirection;
+                        text = "Push plunger slower";
+                    }
+                    else
+                    {
+                        showDot = true;
+                        color = m_GuidanceGoodColor;
+                        text = "Maintain dispense";
+                    }
+
+                    text += " (" + (m_Tutorial.plungerTravelNormalized * 100f).ToString("F0") + "%)";
+                }
+            }
+
+            m_GuidanceArrow.enabled = showArrow;
+            m_GuidanceDot.gameObject.SetActive(showDot);
+            m_GuidanceText.gameObject.SetActive(showArrow || showDot);
+
+            if (showArrow)
+            {
+                arrowDir = arrowDir.sqrMagnitude < 0.000001f ? data.planeNormal : arrowDir.normalized;
+                var tail = basePoint - arrowDir * (m_GuidanceArrowLength * 0.5f);
+                var head = basePoint + arrowDir * (m_GuidanceArrowLength * 0.5f);
+                var sideAxis = Vector3.Cross(arrowDir, data.planeNormal);
+                if (sideAxis.sqrMagnitude < 0.000001f)
+                    sideAxis = Vector3.Cross(arrowDir, Vector3.up);
+                sideAxis.Normalize();
+
+                var wingA = head - arrowDir * m_GuidanceArrowHeadLength + sideAxis * (m_GuidanceArrowHeadLength * 0.45f);
+                var wingB = head - arrowDir * m_GuidanceArrowHeadLength - sideAxis * (m_GuidanceArrowHeadLength * 0.45f);
+
+                m_GuidanceArrow.positionCount = 5;
+                m_GuidanceArrow.SetPosition(0, tail);
+                m_GuidanceArrow.SetPosition(1, head);
+                m_GuidanceArrow.SetPosition(2, wingA);
+                m_GuidanceArrow.SetPosition(3, head);
+                m_GuidanceArrow.SetPosition(4, wingB);
+                m_GuidanceArrow.startWidth = m_GuidanceArrowWidth;
+                m_GuidanceArrow.endWidth = m_GuidanceArrowWidth;
+                m_GuidanceArrow.startColor = color;
+                m_GuidanceArrow.endColor = color;
+            }
+
+            if (showDot)
+            {
+                m_GuidanceDot.position = basePoint;
+                m_GuidanceDot.localScale = Vector3.one * m_GuidanceDotSize;
+                if (m_GuidanceDot.TryGetComponent<Renderer>(out var dotRenderer) && dotRenderer.sharedMaterial != null)
+                    dotRenderer.sharedMaterial.color = color;
+            }
+
+            if (m_GuidanceText.gameObject.activeSelf)
+            {
+                m_GuidanceText.text = text;
+                m_GuidanceText.color = color;
+                m_GuidanceText.characterSize = m_GuidanceTextCharacterSize;
+                m_GuidanceText.fontSize = 64;
+                m_GuidanceText.transform.position = basePoint + data.planeNormal * 0.03f;
+
+                if (m_MainCamera != null)
+                    m_GuidanceText.transform.rotation = Quaternion.LookRotation(m_GuidanceText.transform.position - m_MainCamera.transform.position, data.planeNormal);
+            }
         }
 
         void SetOverlayVisible(bool visible)
@@ -351,6 +565,15 @@ namespace UnityEngine.XR.Templates.MR
 
             if (m_AngleText != null)
                 m_AngleText.gameObject.SetActive(visible && m_ShowAngleText);
+
+            if (m_GuidanceArrow != null)
+                m_GuidanceArrow.enabled = visible && m_ShowGuidanceArrows && m_GuidanceArrow.enabled;
+
+            if (m_GuidanceDot != null)
+                m_GuidanceDot.gameObject.SetActive(visible && m_ShowGuidanceArrows && m_GuidanceDot.gameObject.activeSelf);
+
+            if (m_GuidanceText != null)
+                m_GuidanceText.gameObject.SetActive(visible && m_ShowGuidanceArrows && m_GuidanceText.gameObject.activeSelf);
         }
 
         void CreateVisuals()
@@ -362,11 +585,16 @@ namespace UnityEngine.XR.Templates.MR
             m_Root.SetParent(transform, false);
 
             m_RuntimeLineMaterial = CreateRuntimeMaterial();
+            m_RuntimeGuidanceMaterial = CreateRuntimeMaterial();
 
             m_DropLine = CreateLine("Needle To Surface", m_RuntimeLineMaterial);
             m_PlaneReferenceLine = CreateLine("Surface Direction Reference", m_RuntimeLineMaterial);
             m_ArcLine = CreateLine("Syringe Angle Arc", m_RuntimeLineMaterial);
             m_ArcLine.numCornerVertices = 3;
+
+            m_GuidanceArrow = CreateLine("Guidance Arrow", m_RuntimeGuidanceMaterial);
+            m_GuidanceArrow.startWidth = m_GuidanceArrowWidth;
+            m_GuidanceArrow.endWidth = m_GuidanceArrowWidth;
 
             var textObject = new GameObject("Syringe Angle Text");
             textObject.transform.SetParent(m_Root, false);
@@ -377,6 +605,32 @@ namespace UnityEngine.XR.Templates.MR
             m_AngleText.characterSize = m_TextCharacterSize;
             m_AngleText.color = m_TextColor;
             m_AngleText.text = string.Empty;
+
+            var guidanceTextObject = new GameObject("Guidance Text");
+            guidanceTextObject.transform.SetParent(m_Root, false);
+            m_GuidanceText = guidanceTextObject.AddComponent<TextMesh>();
+            m_GuidanceText.fontSize = 64;
+            m_GuidanceText.anchor = TextAnchor.MiddleCenter;
+            m_GuidanceText.alignment = TextAlignment.Center;
+            m_GuidanceText.characterSize = m_GuidanceTextCharacterSize;
+            m_GuidanceText.color = m_GuidanceBadColor;
+            m_GuidanceText.richText = true;
+            m_GuidanceText.text = string.Empty;
+
+            var dotObj = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            dotObj.name = "Guidance Dot";
+            dotObj.transform.SetParent(m_Root, false);
+            dotObj.transform.localScale = Vector3.one * m_GuidanceDotSize;
+            if (dotObj.TryGetComponent<Collider>(out var dotCollider))
+                Destroy(dotCollider);
+            if (dotObj.TryGetComponent<Renderer>(out var dotRenderer))
+            {
+                dotRenderer.sharedMaterial = m_RuntimeGuidanceMaterial;
+                dotRenderer.sharedMaterial.color = m_GuidanceGoodColor;
+            }
+            m_GuidanceDot = dotObj.transform;
+            m_GuidanceDot.gameObject.SetActive(false);
+            m_GuidanceText.gameObject.SetActive(false);
 
             SetOverlayVisible(false);
         }
