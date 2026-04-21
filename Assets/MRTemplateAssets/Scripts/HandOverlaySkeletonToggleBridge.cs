@@ -14,6 +14,10 @@ namespace UnityEngine.XR.Templates.MR
         bool m_ShowSkeletonByDefault = true;
 
         [SerializeField]
+        [Tooltip("When true, HandVisualizer draws tracked hand meshes (better depth cues and alignment for poke/ray). When false, only joint debug lines.")]
+        bool m_DrawHandMeshes = true;
+
+        [SerializeField]
         bool m_ForceDisableHandRemoval = true;
 
         [SerializeField]
@@ -134,7 +138,7 @@ namespace UnityEngine.XR.Templates.MR
         void ApplyState(bool showSkeleton)
         {
             m_IsSkeletonVisible = showSkeleton;
-            SetVisualizerBool("drawMeshes", false);
+            SetVisualizerBool("drawMeshes", m_DrawHandMeshes);
             SetVisualizerBool("debugDrawJoints", showSkeleton);
 
             if (m_ForceDisableHandRemoval && m_OcclusionManager != null)

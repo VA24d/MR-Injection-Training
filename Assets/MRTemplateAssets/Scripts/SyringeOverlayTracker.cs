@@ -562,6 +562,11 @@ namespace UnityEngine.XR.Templates.MR
                 return;
 
             TryGetHandSubsystem(out m_HandSubsystem);
+
+            // Subsystem can be created but not running yet (or was stopped). Syringe/UI depend on
+            // joint updates — start when available so hand-driven overlays and interactions work.
+            if (m_HandSubsystem != null && !m_HandSubsystem.running)
+                m_HandSubsystem.Start();
         }
 
         void EnsureCameraReferences()

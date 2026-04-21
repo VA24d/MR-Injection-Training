@@ -820,7 +820,7 @@ MonoBehaviour:
   m_SwapHandsButtonName: Swap Hands Button
   m_InjectionTypeButtonName: Injection Type Button
   m_DemoVideoButtonName: Demo Video Button
-  m_DemoVideoCaption: Demo Video
+  m_DemoVideoCaption: Intradermal demo
   m_ShowActionButtonsForCurrentStepOnly: 1
   m_CalibrateIdleLabel: Calibrate Syringe
   m_CalibratingLabelPrefix: Calibrating
@@ -838,7 +838,7 @@ MonoBehaviour:
   m_ActionButtonVerticalSpacing: 6
   m_NavigationRowPairOffset: 78
   m_CoachingCardExtraHeightForActions: 220
-  m_ShowCoachingMetricsHud: 0
+  m_ShowCoachingMetricsHud: 1
   m_MetricsHudGapPx: 10
   m_MetricsHudMinHeight: 52
   m_MetricsHudMaxHeight: 200

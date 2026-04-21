@@ -195,7 +195,7 @@ namespace UnityEngine.XR.Templates.MR
         [Header("Coaching metrics HUD")]
         [SerializeField]
         [Tooltip("Live / mock metrics band between the modal and the action buttons.")]
-        bool m_ShowCoachingMetricsHud = false;
+        bool m_ShowCoachingMetricsHud = true;
 
         [SerializeField, Min(4f)]
         float m_MetricsHudGapPx = 10f;
@@ -204,7 +204,21 @@ namespace UnityEngine.XR.Templates.MR
         float m_MetricsHudMinHeight = 52f;
 
         [SerializeField, Min(40f)]
-        float m_MetricsHudMaxHeight = 200f;
+        float m_MetricsHudMaxHeight = 280f;
+
+        [Header("Pace coaching audio (insertion / removal)")]
+        [SerializeField]
+        [Tooltip("Optional 2D source; created at runtime if missing.")]
+        AudioSource m_PaceFeedbackAudio;
+
+        [SerializeField, Min(0.2f)]
+        float m_PaceAudioCooldownSeconds = 0.9f;
+
+        AudioClip m_PaceToneSlower;
+        AudioClip m_PaceToneFaster;
+        AudioClip m_PaceToneSteady;
+        int m_LastPaceAudioCategory;
+        float m_LastPaceAudioUnscaledTime = -999f;
 
         RectTransform m_MetricsHudRoot;
         TextMeshProUGUI m_MetricsHudText;
@@ -238,6 +252,7 @@ namespace UnityEngine.XR.Templates.MR
             public bool IsTrackingLeftHand;
             public SyringeCalibrationButtonBridge.InjectionType InjectionType;
             public SyringeCalibrationButtonBridge.TutorialStep Step;
+            public int RemovalCheckpointProgressPercent;
 
             public bool Equals(ActionButtonSnapshot other)
             {
@@ -249,7 +264,8 @@ namespace UnityEngine.XR.Templates.MR
                        SkeletonVisible == other.SkeletonVisible &&
                        IsTrackingLeftHand == other.IsTrackingLeftHand &&
                        InjectionType == other.InjectionType &&
-                       Step == other.Step;
+                       Step == other.Step &&
+                       RemovalCheckpointProgressPercent == other.RemovalCheckpointProgressPercent;
             }
         }
 
@@ -296,6 +312,7 @@ namespace UnityEngine.XR.Templates.MR
         void Start()
         {
             ResolveReferences();
+            EnsurePaceFeedbackAudio();
             InitializeCoachingUI();
             SyncTutorialToUI(force: true);
         }
@@ -517,6 +534,7 @@ namespace UnityEngine.XR.Templates.MR
         {
             SyncTutorialToUI(force: false);
             RefreshActionButtons(force: false);
+            ApplyNextStepInteractableState();
 
 #if UNITY_EDITOR
             if (Keyboard.current != null && Keyboard.current.spaceKey.wasPressedThisFrame)
@@ -524,16 +542,201 @@ namespace UnityEngine.XR.Templates.MR
 #endif
         }
 
+        void ApplyNextStepInteractableState()
+        {
+            if (m_NextStepButton == null || !m_AddActionButtonsToCoachingMenu)
+                return;
+
+            var allowNext = m_InjectionTutorial == null || m_InjectionTutorial.removalCheckpointMet;
+            if (m_NextStepButton.interactable != allowNext)
+                m_NextStepButton.interactable = allowNext;
+        }
+
         void LateUpdate()
         {
-            if (!m_ShowCoachingMetricsHud || m_InjectionTutorial == null || m_MetricsHudText == null)
+            if (m_InjectionTutorial == null)
                 return;
 
             var step = m_InjectionTutorial.currentStep;
-            if (!CoachingMetricsStepNeedsPerFrameText(step))
+
+            if (m_ShowCoachingMetricsHud && m_MetricsHudText != null &&
+                CoachingMetricsStepNeedsPerFrameText(step))
+                m_MetricsHudText.text = BuildCoachingMetricsHudText(step);
+
+            if (m_SyncCoachingText &&
+                (step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate ||
+                 step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed))
+            {
+                RefreshLivePaceCoachingTexts(step);
+                TickPaceCoachingAudio(step);
+            }
+            else
+                m_LastPaceAudioCategory = 0;
+        }
+
+        void EnsurePaceFeedbackAudio()
+        {
+            if (m_PaceFeedbackAudio == null)
+                m_PaceFeedbackAudio = GetComponent<AudioSource>();
+
+            if (m_PaceFeedbackAudio == null)
+            {
+                m_PaceFeedbackAudio = gameObject.AddComponent<AudioSource>();
+                m_PaceFeedbackAudio.playOnAwake = false;
+                m_PaceFeedbackAudio.spatialBlend = 0f;
+                m_PaceFeedbackAudio.volume = 0.45f;
+            }
+
+            if (m_PaceToneSlower == null)
+                m_PaceToneSlower = CreatePaceBeepClip(300f, 0.11f, 0.35f);
+            if (m_PaceToneFaster == null)
+                m_PaceToneFaster = CreatePaceBeepClip(560f, 0.11f, 0.35f);
+            if (m_PaceToneSteady == null)
+                m_PaceToneSteady = CreatePaceBeepClip(200f, 0.16f, 0.3f);
+        }
+
+        static AudioClip CreatePaceBeepClip(float frequencyHz, float durationSeconds, float amplitude)
+        {
+            const int sampleRate = 44100;
+            var sampleCount = Mathf.Max(1, (int)(sampleRate * durationSeconds));
+            var clip = AudioClip.Create("PaceBeep", sampleCount, 1, sampleRate, false);
+            var samples = new float[sampleCount];
+            var fadeIn = Mathf.Min(sampleCount / 8, 64);
+            var fadeOut = Mathf.Min(sampleCount / 8, 64);
+            for (var i = 0; i < sampleCount; i++)
+            {
+                var env = 1f;
+                if (i < fadeIn && fadeIn > 0)
+                    env = i / (float)fadeIn;
+                else if (i > sampleCount - fadeOut && fadeOut > 0)
+                    env = (sampleCount - i) / (float)fadeOut;
+                samples[i] = env * amplitude * Mathf.Sin(2f * Mathf.PI * frequencyHz * i / sampleRate);
+            }
+
+            clip.SetData(samples, 0);
+            return clip;
+        }
+
+        void RefreshLivePaceCoachingTexts(SyringeCalibrationButtonBridge.TutorialStep step)
+        {
+            var ix = GetFlowIndex(step);
+            var title = GetFlowTitle(step, ix);
+            var metrics = BuildCoachingMetricsHudText(step);
+            var hint = BuildPaceCoachingHint(step);
+            var body = BuildFlowDescription(step) + "\n\n" + metrics + "\n\n" + hint;
+
+            if (m_CoachingTitleText != null)
+                m_CoachingTitleText.text = title;
+
+            if (m_CoachingBodyText != null)
+            {
+                m_CoachingBodyText.text = body;
+                m_CoachingBodyText.textWrappingMode = TextWrappingModes.Normal;
+                m_CoachingBodyText.overflowMode = TextOverflowModes.Overflow;
+            }
+
+            ApplyTextToActiveStepPanel(ix, title, body, step);
+        }
+
+        string BuildPaceCoachingHint(SyringeCalibrationButtonBridge.TutorialStep step)
+        {
+            if (m_InjectionTutorial == null)
+                return string.Empty;
+
+            var t = m_InjectionTutorial;
+            if (step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed)
+            {
+                if (t.removalLateralSmoothedCmPerSec > t.maxRemovalLateralSpeedCmPerSec * 1.05f)
+                    return "Coaching: Move straighter — less side-to-side wobble while withdrawing.";
+                var rd = t.removalSpeedCmPerSec - t.targetRemovalSpeedCmPerSec;
+                if (rd < -1.5f)
+                    return "Coaching: Withdraw a bit faster toward the green speed band.";
+                if (rd > 1.5f)
+                    return "Coaching: Slow down — ease the withdrawal to match target speed.";
+                return "Coaching: Hold — speed and stability look on target. Keep the lock-in steady.";
+            }
+
+            if (step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate)
+            {
+                var id = t.insertionSpeedCmPerSec - t.targetInsertionSpeedCmPerSec;
+                var fd = t.flowRateMlPerSec - t.targetFlowRateMlPerSec;
+                if (id < -1.5f)
+                    return "Coaching: Press in slightly faster to reach target insertion speed.";
+                if (id > 1.5f)
+                    return "Coaching: Slow the push — ease insertion to match target cm/s.";
+                if (fd < -0.25f)
+                    return "Coaching: Flow is low — increase plunger rate slightly (watch ml/s).";
+                if (fd > 0.25f)
+                    return "Coaching: Flow is high — ease plunger pressure slightly.";
+                return "Coaching: Hold — insertion and flow in band. Keep lock-in steady.";
+            }
+
+            return string.Empty;
+        }
+
+        int ClassifyPaceAudioCategory(SyringeCalibrationButtonBridge.TutorialStep step)
+        {
+            if (m_InjectionTutorial == null)
+                return 0;
+
+            var t = m_InjectionTutorial;
+            if (step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed)
+            {
+                if (t.removalLateralSmoothedCmPerSec > t.maxRemovalLateralSpeedCmPerSec * 1.05f)
+                    return 7;
+                var rd = t.removalSpeedCmPerSec - t.targetRemovalSpeedCmPerSec;
+                if (rd < -1.5f)
+                    return 5;
+                if (rd > 1.5f)
+                    return 6;
+                return 0;
+            }
+
+            if (step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate)
+            {
+                var id = t.insertionSpeedCmPerSec - t.targetInsertionSpeedCmPerSec;
+                var fd = t.flowRateMlPerSec - t.targetFlowRateMlPerSec;
+                if (id < -1.5f)
+                    return 1;
+                if (id > 1.5f)
+                    return 2;
+                if (fd < -0.25f)
+                    return 3;
+                if (fd > 0.25f)
+                    return 4;
+                return 0;
+            }
+
+            return 0;
+        }
+
+        void TickPaceCoachingAudio(SyringeCalibrationButtonBridge.TutorialStep step)
+        {
+            EnsurePaceFeedbackAudio();
+            var cat = ClassifyPaceAudioCategory(step);
+            if (cat == 0)
+            {
+                m_LastPaceAudioCategory = 0;
+                return;
+            }
+
+            var now = Time.unscaledTime;
+            if (cat == m_LastPaceAudioCategory && now - m_LastPaceAudioUnscaledTime < m_PaceAudioCooldownSeconds)
                 return;
 
-            m_MetricsHudText.text = BuildCoachingMetricsHudText(step);
+            m_LastPaceAudioCategory = cat;
+            m_LastPaceAudioUnscaledTime = now;
+
+            var clip = cat switch
+            {
+                7 => m_PaceToneSteady,
+                1 or 3 or 5 => m_PaceToneFaster,
+                2 or 4 or 6 => m_PaceToneSlower,
+                _ => null,
+            };
+
+            if (clip != null && m_PaceFeedbackAudio != null)
+                m_PaceFeedbackAudio.PlayOneShot(clip);
         }
 
         void OpenModal()
@@ -928,6 +1131,7 @@ namespace UnityEngine.XR.Templates.MR
                 case SyringeCalibrationButtonBridge.TutorialStep.Calibration:
                 case SyringeCalibrationButtonBridge.TutorialStep.FillSyringe:
                 case SyringeCalibrationButtonBridge.TutorialStep.BubbleCheckManual:
+                case SyringeCalibrationButtonBridge.TutorialStep.CleanSurfaceAlcohol:
                 case SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle:
                 case SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate:
                 case SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed:
@@ -935,6 +1139,43 @@ namespace UnityEngine.XR.Templates.MR
                 default:
                     return false;
             }
+        }
+
+        /// <summary>Single-line pace hint for the metrics strip (matches audio cues).</summary>
+        string BuildPaceHudSummaryLine(SyringeCalibrationButtonBridge.TutorialStep step)
+        {
+            if (m_InjectionTutorial == null)
+                return "—";
+
+            var t = m_InjectionTutorial;
+            if (step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed)
+            {
+                if (t.removalLateralSmoothedCmPerSec > t.maxRemovalLateralSpeedCmPerSec * 1.05f)
+                    return "Straighter / less wobble";
+                var rd = t.removalSpeedCmPerSec - t.targetRemovalSpeedCmPerSec;
+                if (rd < -1.5f)
+                    return "Faster withdrawal";
+                if (rd > 1.5f)
+                    return "Slower withdrawal";
+                return "On target";
+            }
+
+            if (step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate)
+            {
+                var id = t.insertionSpeedCmPerSec - t.targetInsertionSpeedCmPerSec;
+                var fd = t.flowRateMlPerSec - t.targetFlowRateMlPerSec;
+                if (id < -1.5f)
+                    return "Faster push (insertion)";
+                if (id > 1.5f)
+                    return "Slower push (insertion)";
+                if (fd < -0.25f)
+                    return "More flow / plunger";
+                if (fd > 0.25f)
+                    return "Less flow / ease plunger";
+                return "On target";
+            }
+
+            return "—";
         }
 
         string BuildCoachingMetricsHudText(SyringeCalibrationButtonBridge.TutorialStep step)
@@ -987,6 +1228,17 @@ namespace UnityEngine.XR.Templates.MR
                         "Status: " + (t.bubbleCheckCompleted ? "cleared" : "pending") + "\n" +
                         "Camera assist (mock): " + (t.bubbleCheckCompleted ? "idle" : "scanning");
 
+                case SyringeCalibrationButtonBridge.TutorialStep.CleanSurfaceAlcohol:
+                {
+                    var surface = m_SurfaceSelectionTool != null;
+                    var placed = surface && m_SurfaceSelectionTool.hasPlacedSurface;
+                    return
+                        "Clean surface\n" +
+                        "Alcohol wipe: " + (t.surfaceCleanCompleted ? "logged" : "pending") + "\n" +
+                        "Site (surface): " + (placed ? "placed" : "place for injection site") + "\n" +
+                        "Technique (mock): spiral outward, dry before needle";
+                }
+
                 case SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle:
                 {
                     var r = t.targetInjectionAngleRange;
@@ -1000,6 +1252,7 @@ namespace UnityEngine.XR.Templates.MR
                 case SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate:
                     return
                         "Insertion + Flow\n" +
+                        "Pace: " + BuildPaceHudSummaryLine(step) + "\n" +
                         "Insertion: " + t.insertionSpeedCmPerSec.ToString("F1") + " / " + t.targetInsertionSpeedCmPerSec.ToString("F1") + " cm/s\n" +
                         "Flow: " + t.flowRateMlPerSec.ToString("F2") + " / " + t.targetFlowRateMlPerSec.ToString("F2") + " ml/s\n" +
                         "Lock-in: " + (t.insertionFlowHoldProgressNormalized * 100f).ToString("F0") + "%";
@@ -1007,8 +1260,10 @@ namespace UnityEngine.XR.Templates.MR
                 case SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed:
                     return
                         "Withdrawal\n" +
+                        "Pace: " + BuildPaceHudSummaryLine(step) + "\n" +
                         "Speed: " + t.removalSpeedCmPerSec.ToString("F1") + " / " + t.targetRemovalSpeedCmPerSec.ToString("F1") + " cm/s\n" +
-                        "Steady: " + (t.removalHoldProgressNormalized * 100f).ToString("F0") + "%";
+                        "Lateral: " + t.removalLateralSmoothedCmPerSec.ToString("F1") + " / " + t.maxRemovalLateralSpeedCmPerSec.ToString("F1") + " cm/s (stab)\n" +
+                        "Checkpoint: " + (t.removalHoldProgressNormalized * 100f).ToString("F0") + "% (speed + stability)";
 
                 case SyringeCalibrationButtonBridge.TutorialStep.FinalScore:
                     return
@@ -1172,6 +1427,28 @@ namespace UnityEngine.XR.Templates.MR
                     Set(m_DemoVideoButtonObject, false);
                     break;
 
+                case SyringeCalibrationButtonBridge.TutorialStep.BubbleCheckManual:
+                    Set(m_CalibrateButtonObject, false);
+                    Set(m_CreateSurfaceButtonObject, true);
+                    Set(m_SkeletonToggleButtonObject, false);
+                    Set(m_PreviousStepButtonObject, true);
+                    Set(m_NextStepButtonObject, true);
+                    Set(m_SwapHandsButtonObject, false);
+                    Set(m_InjectionTypeButtonObject, false);
+                    Set(m_DemoVideoButtonObject, demoOk);
+                    break;
+
+                case SyringeCalibrationButtonBridge.TutorialStep.CleanSurfaceAlcohol:
+                    Set(m_CalibrateButtonObject, false);
+                    Set(m_CreateSurfaceButtonObject, true);
+                    Set(m_SkeletonToggleButtonObject, false);
+                    Set(m_PreviousStepButtonObject, true);
+                    Set(m_NextStepButtonObject, true);
+                    Set(m_SwapHandsButtonObject, false);
+                    Set(m_InjectionTypeButtonObject, false);
+                    Set(m_DemoVideoButtonObject, demoOk);
+                    break;
+
                 case SyringeCalibrationButtonBridge.TutorialStep.FinalScore:
                     Set(m_CalibrateButtonObject, false);
                     Set(m_CreateSurfaceButtonObject, false);
@@ -1191,7 +1468,7 @@ namespace UnityEngine.XR.Templates.MR
                     Set(m_NextStepButtonObject, true);
                     Set(m_SwapHandsButtonObject, false);
                     Set(m_InjectionTypeButtonObject, false);
-                    Set(m_DemoVideoButtonObject, demoOk);
+                    Set(m_DemoVideoButtonObject, false);
                     break;
             }
         }
@@ -1234,6 +1511,7 @@ namespace UnityEngine.XR.Templates.MR
         {
             var injection = m_InjectionTutorial != null ? m_InjectionTutorial.selectedInjectionType : default;
             var step = m_InjectionTutorial != null ? m_InjectionTutorial.currentStep : default;
+            var removalPct = m_InjectionTutorial != null ? m_InjectionTutorial.removalCheckpointProgressPercent : -1;
             return new ActionButtonSnapshot
             {
                 CalibrationTapCount = m_Tracker != null ? m_Tracker.calibrationTapCount : 0,
@@ -1245,6 +1523,7 @@ namespace UnityEngine.XR.Templates.MR
                 IsTrackingLeftHand = m_Tracker != null && m_Tracker.isTrackingLeftHand,
                 InjectionType = injection,
                 Step = step,
+                RemovalCheckpointProgressPercent = removalPct,
             };
         }
 
@@ -1509,7 +1788,9 @@ namespace UnityEngine.XR.Templates.MR
                 {
                     m_CoachingBodyText.text = stepBody;
                     m_CoachingBodyText.textWrappingMode = TextWrappingModes.Normal;
-                    if (step == SyringeCalibrationButtonBridge.TutorialStep.FinalScore)
+                    if (step == SyringeCalibrationButtonBridge.TutorialStep.FinalScore ||
+                        step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate ||
+                        step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed)
                         m_CoachingBodyText.overflowMode = TextOverflowModes.Overflow;
                 }
 
@@ -1545,12 +1826,36 @@ namespace UnityEngine.XR.Templates.MR
             UpdateTutorialSyncKey();
         }
 
+        /// <summary>
+        /// Tutorial flow exposes 10 steps (see <see cref="GetFlowIndex"/>). When fewer
+        /// <see cref="m_StepList"/> art panels are assigned, clamping would leave the last
+        /// panel active from mid-flow through the end — no visible card transitions. Map by
+        /// modulo so each step change can activate a different child (recommended: add 10 panels
+        /// in the scene for 1:1 art per step).
+        /// </summary>
+        int ResolveStepPanelIndex(int flowIndex)
+        {
+            if (m_StepList.Count <= 0)
+                return -1;
+
+            var panelCount = m_StepList.Count;
+            const int kTutorialFlowSteps = 10;
+
+            if (panelCount >= kTutorialFlowSteps)
+                return Mathf.Clamp(flowIndex, 0, panelCount - 1);
+
+            return flowIndex % panelCount;
+        }
+
         int UpdateStepPanels(int stepIndex)
         {
             if (m_StepList.Count == 0)
                 return -1;
 
-            var panelIndex = Mathf.Clamp(stepIndex, 0, m_StepList.Count - 1);
+            var panelIndex = ResolveStepPanelIndex(stepIndex);
+            if (panelIndex < 0)
+                return -1;
+
             for (var i = 0; i < m_StepList.Count; i++)
             {
                 var panel = m_StepList[i].stepObject;
@@ -1645,7 +1950,9 @@ namespace UnityEngine.XR.Templates.MR
             {
                 bodyTmp.text = body;
                 bodyTmp.textWrappingMode = TextWrappingModes.Normal;
-                if (step == SyringeCalibrationButtonBridge.TutorialStep.FinalScore)
+                if (step == SyringeCalibrationButtonBridge.TutorialStep.FinalScore ||
+                    step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate ||
+                    step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed)
                     bodyTmp.overflowMode = TextOverflowModes.Overflow;
             }
         }
@@ -1659,17 +1966,18 @@ namespace UnityEngine.XR.Templates.MR
                 SyringeCalibrationButtonBridge.TutorialStep.Calibration => 2,
                 SyringeCalibrationButtonBridge.TutorialStep.FillSyringe => 3,
                 SyringeCalibrationButtonBridge.TutorialStep.BubbleCheckManual => 4,
-                SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle => 5,
-                SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate => 6,
-                SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed => 7,
-                SyringeCalibrationButtonBridge.TutorialStep.FinalScore => 8,
+                SyringeCalibrationButtonBridge.TutorialStep.CleanSurfaceAlcohol => 5,
+                SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle => 6,
+                SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate => 7,
+                SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed => 8,
+                SyringeCalibrationButtonBridge.TutorialStep.FinalScore => 9,
                 _ => 0,
             };
         }
 
         static void GetDisplayedFlowStep(int flowIndex, out int displayNumber, out int totalSteps)
         {
-            totalSteps = 9;
+            totalSteps = 10;
             displayNumber = flowIndex + 1;
         }
 
@@ -1682,6 +1990,7 @@ namespace UnityEngine.XR.Templates.MR
                 SyringeCalibrationButtonBridge.TutorialStep.InjectionType => "Injection Type",
                 SyringeCalibrationButtonBridge.TutorialStep.FillSyringe => "Fill Syringe",
                 SyringeCalibrationButtonBridge.TutorialStep.BubbleCheckManual => "Bubble Check",
+                SyringeCalibrationButtonBridge.TutorialStep.CleanSurfaceAlcohol => "Clean Surface",
                 SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle => "Injection Angle",
                 SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate => "Insertion + Flow Rate",
                 SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed => "Remove Speed",
@@ -1716,7 +2025,10 @@ namespace UnityEngine.XR.Templates.MR
                     return $"Fill syringe and track amount: {(m_InjectionTutorial.fillAmountNormalized * 100f):F0}%";
 
                 case SyringeCalibrationButtonBridge.TutorialStep.BubbleCheckManual:
-                    return "Perform manual bubble check before injection.";
+                    return "Perform manual bubble check before injection. Use Demo Video below if you want the intradermal reference clip while you inspect the syringe.";
+
+                case SyringeCalibrationButtonBridge.TutorialStep.CleanSurfaceAlcohol:
+                    return "Clean the injection site on your placed surface with an alcohol wipe: use a spiral motion from center outward, allow the skin to air-dry before needling. Tap Next when you have finished the wipe step. Demo Video is available for technique reference.";
 
                 case SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle:
                     return "Align and hold the injection angle target.";
@@ -1725,7 +2037,7 @@ namespace UnityEngine.XR.Templates.MR
                     return "Maintain insertion speed and flow rate targets.";
 
                 case SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed:
-                    return "Remove syringe at controlled speed.";
+                    return "Withdraw the needle at the target speed while keeping lateral motion low (stability). The checkpoint fills only when both match; Next stays disabled until it completes or the run advances automatically.";
 
                 case SyringeCalibrationButtonBridge.TutorialStep.FinalScore:
                     return m_InjectionTutorial != null
@@ -1749,6 +2061,7 @@ namespace UnityEngine.XR.Templates.MR
                 SyringeCalibrationButtonBridge.TutorialStep.InjectionType => "Next",
                 SyringeCalibrationButtonBridge.TutorialStep.FillSyringe => "Filling...",
                 SyringeCalibrationButtonBridge.TutorialStep.BubbleCheckManual => "Bubble Check",
+                SyringeCalibrationButtonBridge.TutorialStep.CleanSurfaceAlcohol => "Wipe done",
                 SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle => "Hold Angle",
                 SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate => "Speed + Flow",
                 SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed => "Remove",
@@ -1768,8 +2081,15 @@ namespace UnityEngine.XR.Templates.MR
                 return;
             }
 
+            if (m_InjectionTutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed &&
+                !m_InjectionTutorial.removalCheckpointMet)
+                return;
+
             if (m_InjectionTutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.BubbleCheckManual)
                 m_InjectionTutorial.MarkBubbleCheckCompleted();
+
+            if (m_InjectionTutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.CleanSurfaceAlcohol)
+                m_InjectionTutorial.MarkSurfaceCleanCompleted();
 
             m_InjectionTutorial.AdvanceStep();
             SyncTutorialToUI(force: true);

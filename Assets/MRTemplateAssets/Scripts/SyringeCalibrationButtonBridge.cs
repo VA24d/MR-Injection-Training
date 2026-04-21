@@ -10,6 +10,7 @@ namespace UnityEngine.XR.Templates.MR
         public float injectionType;
         public float fill;
         public float bubble;
+        public float surfaceClean;
         public float angle;
         public float insertion;
         public float flow;
@@ -24,15 +25,17 @@ namespace UnityEngine.XR.Templates.MR
     {
         public enum TutorialStep
         {
-            Start,
-            Calibration,
-            InjectionType,
-            FillSyringe,
-            BubbleCheckManual,
-            InjectionAngle,
-            InsertionSpeedFlowRate,
-            RemoveSpeed,
-            FinalScore,
+            Start = 0,
+            Calibration = 1,
+            InjectionType = 2,
+            FillSyringe = 3,
+            BubbleCheckManual = 4,
+            InjectionAngle = 5,
+            InsertionSpeedFlowRate = 6,
+            RemoveSpeed = 7,
+            FinalScore = 8,
+            /// <summary>Appended at end to preserve serialized enum values for prior steps.</summary>
+            CleanSurfaceAlcohol = 9,
         }
 
         public enum InjectionType
@@ -81,6 +84,9 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField, Min(0f)]
         float m_BubbleManualFallbackDelay = 2.5f;
 
+        [SerializeField, Min(0f)]
+        float m_CleanSurfaceManualFallbackDelay = 2.5f;
+
         [SerializeField]
         Vector2 m_TargetInjectionAngleRange = new Vector2(25f, 55f);
 
@@ -98,6 +104,18 @@ namespace UnityEngine.XR.Templates.MR
 
         [SerializeField, Min(0.1f)]
         float m_SpeedHoldSeconds = 0.8f;
+
+        [SerializeField, Min(0.05f)]
+        [Tooltip("Max smoothed lateral needle speed (cm/s) during withdrawal to count as stable for the removal checkpoint.")]
+        float m_MaxRemovalLateralSpeedCmPerSec = 2.2f;
+
+        [SerializeField, Min(0.1f)]
+        [Tooltip("Lateral speed at or above this (cm/s) drives the stability portion of removal score toward zero.")]
+        float m_RemovalLateralScoreRefCmPerSec = 5f;
+
+        [SerializeField, Min(0.5f)]
+        [Tooltip("How quickly displayed lateral speed follows measured lateral speed (higher = snappier).")]
+        float m_RemovalLateralSmoothing = 8f;
 
         [Header("Runtime state")]
         [SerializeField]
@@ -119,6 +137,9 @@ namespace UnityEngine.XR.Templates.MR
         bool m_BubbleCheckCompleted;
 
         [SerializeField]
+        bool m_SurfaceCleanCompleted;
+
+        [SerializeField]
         float m_InjectionAngleDegrees;
 
         [SerializeField]
@@ -129,6 +150,12 @@ namespace UnityEngine.XR.Templates.MR
 
         [SerializeField]
         float m_RemovalSpeedCmPerSec;
+
+        [SerializeField]
+        float m_RemovalLateralSpeedCmPerSec;
+
+        [SerializeField]
+        float m_RemovalLateralSmoothedCmPerSec;
 
         [SerializeField, Range(0f, 100f)]
         float m_FinalScore;
@@ -157,7 +184,17 @@ namespace UnityEngine.XR.Templates.MR
         public float insertionSpeedCmPerSec => m_InsertionSpeedCmPerSec;
         public float flowRateMlPerSec => m_FlowRateMlPerSec;
         public float removalSpeedCmPerSec => m_RemovalSpeedCmPerSec;
+        /// <summary>Instantaneous lateral needle speed during withdrawal (cm/s), perpendicular to syringe forward.</summary>
+        public float removalLateralSpeedCmPerSec => m_RemovalLateralSpeedCmPerSec;
+        /// <summary>Smoothed lateral speed used for stability gate and scoring.</summary>
+        public float removalLateralSmoothedCmPerSec => m_RemovalLateralSmoothedCmPerSec;
+        public float maxRemovalLateralSpeedCmPerSec => m_MaxRemovalLateralSpeedCmPerSec;
+        /// <summary>True when not on the removal step, or when speed + stability hold has fully completed (manual Next allowed).</summary>
+        public bool removalCheckpointMet =>
+            m_CurrentStep != TutorialStep.RemoveSpeed ||
+            m_RemovalHoldProgress >= m_SpeedHoldSeconds - 0.001f;
         public bool bubbleCheckCompleted => m_BubbleCheckCompleted;
+        public bool surfaceCleanCompleted => m_SurfaceCleanCompleted;
 
         public float angleHoldProgressNormalized =>
             m_AngleHoldSeconds > 0.01f ? Mathf.Clamp01(m_AngleHoldProgress / m_AngleHoldSeconds) : 0f;
@@ -167,6 +204,12 @@ namespace UnityEngine.XR.Templates.MR
 
         public float removalHoldProgressNormalized =>
             m_SpeedHoldSeconds > 0.01f ? Mathf.Clamp01(m_RemovalHoldProgress / m_SpeedHoldSeconds) : 0f;
+
+        /// <summary>Rounded checkpoint progress 0–100 on <see cref="TutorialStep.RemoveSpeed"/>; -1 on other steps (for UI diffing).</summary>
+        public int removalCheckpointProgressPercent =>
+            m_CurrentStep == TutorialStep.RemoveSpeed
+                ? Mathf.Clamp(Mathf.RoundToInt(removalHoldProgressNormalized * 100f), 0, 100)
+                : -1;
 
         public Vector2 targetInjectionAngleRange => m_TargetInjectionAngleRange;
         public float targetInsertionSpeedCmPerSec => m_TargetInsertionSpeedCmPerSec;
@@ -185,6 +228,7 @@ namespace UnityEngine.XR.Templates.MR
                 "Injection type: " + s.injectionType.ToString("F1") + "\n" +
                 "Fill: " + s.fill.ToString("F1") + "\n" +
                 "Bubble check: " + s.bubble.ToString("F1") + "\n" +
+                "Clean surface: " + s.surfaceClean.ToString("F1") + "\n" +
                 "Angle: " + s.angle.ToString("F1") + "\n" +
                 "Insertion: " + s.insertion.ToString("F1") + "\n" +
                 "Flow rate: " + s.flow.ToString("F1") + "\n" +
@@ -226,10 +270,13 @@ namespace UnityEngine.XR.Templates.MR
             m_SelectedInjectionType = InjectionType.None;
             m_FillAmountNormalized = 0f;
             m_BubbleCheckCompleted = false;
+            m_SurfaceCleanCompleted = false;
             m_InjectionAngleDegrees = 0f;
             m_InsertionSpeedCmPerSec = 0f;
             m_FlowRateMlPerSec = 0f;
             m_RemovalSpeedCmPerSec = 0f;
+            m_RemovalLateralSpeedCmPerSec = 0f;
+            m_RemovalLateralSmoothedCmPerSec = 0f;
             m_HasPreviousNeedleTip = false;
             m_LastScoreBreakdown = default;
 
@@ -266,6 +313,11 @@ namespace UnityEngine.XR.Templates.MR
             m_BubbleCheckCompleted = true;
         }
 
+        public void MarkSurfaceCleanCompleted()
+        {
+            m_SurfaceCleanCompleted = true;
+        }
+
         public void AdvanceStep()
         {
             if (m_IsFinished)
@@ -286,6 +338,9 @@ namespace UnityEngine.XR.Templates.MR
                     GoToStep(TutorialStep.BubbleCheckManual);
                     break;
                 case TutorialStep.BubbleCheckManual:
+                    GoToStep(TutorialStep.CleanSurfaceAlcohol);
+                    break;
+                case TutorialStep.CleanSurfaceAlcohol:
                     GoToStep(TutorialStep.InjectionAngle);
                     break;
                 case TutorialStep.InjectionAngle:
@@ -326,6 +381,9 @@ namespace UnityEngine.XR.Templates.MR
                     GoToStep(TutorialStep.FillSyringe);
                     break;
                 case TutorialStep.InjectionAngle:
+                    GoToStep(TutorialStep.CleanSurfaceAlcohol);
+                    break;
+                case TutorialStep.CleanSurfaceAlcohol:
                     GoToStep(TutorialStep.BubbleCheckManual);
                     break;
                 case TutorialStep.InsertionSpeedFlowRate:
@@ -383,6 +441,9 @@ namespace UnityEngine.XR.Templates.MR
                     break;
                 case TutorialStep.BubbleCheckManual:
                     TickBubbleCheckStep();
+                    break;
+                case TutorialStep.CleanSurfaceAlcohol:
+                    TickCleanSurfaceStep();
                     break;
                 case TutorialStep.InjectionAngle:
                     TickInjectionAngleStep();
@@ -448,6 +509,15 @@ namespace UnityEngine.XR.Templates.MR
                 m_BubbleCheckCompleted = true;
 
             if (m_BubbleCheckCompleted)
+                GoToStep(TutorialStep.CleanSurfaceAlcohol);
+        }
+
+        void TickCleanSurfaceStep()
+        {
+            if (!m_SurfaceCleanCompleted && m_AutoAdvanceStub && m_StepElapsedSeconds >= m_CleanSurfaceManualFallbackDelay)
+                m_SurfaceCleanCompleted = true;
+
+            if (m_SurfaceCleanCompleted)
                 GoToStep(TutorialStep.InjectionAngle);
         }
 
@@ -499,10 +569,17 @@ namespace UnityEngine.XR.Templates.MR
             if (!hasTracking && m_AutoAdvanceStub)
             {
                 m_RemovalSpeedCmPerSec = Mathf.Lerp(m_RemovalSpeedCmPerSec, m_TargetRemovalSpeedCmPerSec, 3f * Time.deltaTime);
+                m_RemovalLateralSmoothedCmPerSec = Mathf.Lerp(m_RemovalLateralSmoothedCmPerSec, 0f, 5f * Time.deltaTime);
+            }
+            else if (hasTracking)
+            {
+                var t = Mathf.Clamp01(m_RemovalLateralSmoothing * Time.deltaTime);
+                m_RemovalLateralSmoothedCmPerSec = Mathf.Lerp(m_RemovalLateralSmoothedCmPerSec, m_RemovalLateralSpeedCmPerSec, t);
             }
 
             var removeOk = Mathf.Abs(m_RemovalSpeedCmPerSec - m_TargetRemovalSpeedCmPerSec) <= 1.5f;
-            if (removeOk)
+            var stabilityOk = m_RemovalLateralSmoothedCmPerSec <= m_MaxRemovalLateralSpeedCmPerSec;
+            if (removeOk && stabilityOk)
                 m_RemovalHoldProgress += Time.deltaTime;
             else
                 m_RemovalHoldProgress = 0f;
@@ -533,6 +610,9 @@ namespace UnityEngine.XR.Templates.MR
                 else if (m_CurrentStep == TutorialStep.RemoveSpeed)
                 {
                     m_RemovalSpeedCmPerSec = Mathf.Max(0f, -forwardSpeedCmPerSec);
+                    var axialMetersPerSec = Vector3.Dot(needleVelocity, pose.forward);
+                    var lateralVec = needleVelocity - pose.forward * axialMetersPerSec;
+                    m_RemovalLateralSpeedCmPerSec = lateralVec.magnitude * 100f;
                 }
             }
 
@@ -548,15 +628,18 @@ namespace UnityEngine.XR.Templates.MR
 
             var calibrationScore = (m_Tracker == null || m_Tracker.isMarkerCalibrated) ? 20f : 12f;
             var typeScore = m_SelectedInjectionType == InjectionType.None ? 0f : 10f;
-            var fillScore = Mathf.Clamp01(1f - Mathf.Abs(m_FillAmountNormalized - m_TargetFillAmount)) * 15f;
+            var fillScore = Mathf.Clamp01(1f - Mathf.Abs(m_FillAmountNormalized - m_TargetFillAmount)) * 12f;
             var bubbleScore = m_BubbleCheckCompleted ? 10f : 0f;
+            var surfaceCleanScore = m_SurfaceCleanCompleted ? 8f : 0f;
             var angleMidpoint = 0.5f * (m_TargetInjectionAngleRange.x + m_TargetInjectionAngleRange.y);
-            var angleScore = Mathf.Clamp01(1f - Mathf.Abs(m_InjectionAngleDegrees - angleMidpoint) / 25f) * 15f;
+            var angleScore = Mathf.Clamp01(1f - Mathf.Abs(m_InjectionAngleDegrees - angleMidpoint) / 25f) * 12f;
             var insertionScore = Mathf.Clamp01(1f - Mathf.Abs(m_InsertionSpeedCmPerSec - m_TargetInsertionSpeedCmPerSec) / 4f) * 8f;
-            var flowScore = Mathf.Clamp01(1f - Mathf.Abs(m_FlowRateMlPerSec - m_TargetFlowRateMlPerSec) / 0.7f) * 7f;
-            var removeScore = Mathf.Clamp01(1f - Mathf.Abs(m_RemovalSpeedCmPerSec - m_TargetRemovalSpeedCmPerSec) / 4f) * 15f;
+            var flowScore = Mathf.Clamp01(1f - Mathf.Abs(m_FlowRateMlPerSec - m_TargetFlowRateMlPerSec) / 0.7f) * 5f;
+            var removeSpeedQuality = Mathf.Clamp01(1f - Mathf.Abs(m_RemovalSpeedCmPerSec - m_TargetRemovalSpeedCmPerSec) / 4f);
+            var removeStabilityQuality = Mathf.Clamp01(1f - m_RemovalLateralSmoothedCmPerSec / m_RemovalLateralScoreRefCmPerSec);
+            var removeScore = (removeSpeedQuality * 0.65f + removeStabilityQuality * 0.35f) * 15f;
 
-            var sum = calibrationScore + typeScore + fillScore + bubbleScore + angleScore + insertionScore + flowScore + removeScore;
+            var sum = calibrationScore + typeScore + fillScore + bubbleScore + surfaceCleanScore + angleScore + insertionScore + flowScore + removeScore;
             m_FinalScore = Mathf.Clamp(sum, 0f, 100f);
 
             m_LastScoreBreakdown = new ScoreBreakdown
@@ -565,6 +648,7 @@ namespace UnityEngine.XR.Templates.MR
                 injectionType = typeScore,
                 fill = fillScore,
                 bubble = bubbleScore,
+                surfaceClean = surfaceCleanScore,
                 angle = angleScore,
                 insertion = insertionScore,
                 flow = flowScore,
@@ -589,7 +673,12 @@ namespace UnityEngine.XR.Templates.MR
                 m_InsertionHoldProgress = 0f;
 
             if (nextStep == TutorialStep.RemoveSpeed)
+            {
                 m_RemovalHoldProgress = 0f;
+                m_RemovalLateralSpeedCmPerSec = 0f;
+                m_RemovalLateralSmoothedCmPerSec = 0f;
+                m_HasPreviousNeedleTip = false;
+            }
 
             if (nextStep == TutorialStep.FinalScore)
                 FinalizeScore();
@@ -612,6 +701,9 @@ namespace UnityEngine.XR.Templates.MR
 
             if (Input.GetKeyDown(KeyCode.B))
                 MarkBubbleCheckCompleted();
+
+            if (Input.GetKeyDown(KeyCode.W))
+                MarkSurfaceCleanCompleted();
 
             if (Input.GetKeyDown(KeyCode.N))
                 AdvanceStep();
