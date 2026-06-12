@@ -59,7 +59,7 @@ namespace UnityEngine.XR.Templates.MR
         float m_WingsToBarrelEnd = 0.06f;
 
         [SerializeField, Min(0f)]
-        float m_BarrelEndToNeedleTip = 0.048f;
+        float m_BarrelEndToNeedleTip = 0.047f;
 
         [SerializeField, Min(0f)]
         float m_MetalNeedleLength = 0.025f;
@@ -108,7 +108,7 @@ namespace UnityEngine.XR.Templates.MR
 
         [Header("Marker calibration")]
         [SerializeField]
-        bool m_EnableMarkerAssist = true;
+        bool m_EnableMarkerAssist = false;
 
         [SerializeField, Min(1)]
         int m_RequiredCalibrationTaps = 4;
@@ -163,7 +163,7 @@ namespace UnityEngine.XR.Templates.MR
         bool m_ForceMarkerOnlyAfterCalibration = true;
 
         [SerializeField]
-        bool m_EnableMarkerDebug = true;
+        bool m_EnableMarkerDebug = false;
 
         [SerializeField]
         bool m_ShowSearchRegion = true;
@@ -639,7 +639,15 @@ namespace UnityEngine.XR.Templates.MR
                 return false;
 
             var axisFromContacts = axisVector.normalized;
-            var axis = GetStabilizedDirection(leftHand, axisFromContacts, indexWingRaw, middleWingRaw);
+
+            // Non-invertible "out of the hand" reference (wrist -> middle finger). Unlike the
+            // thumb->finger contact axis, this does not reverse when the thumb occludes or the
+            // fingers curl, so it anchors the syringe direction sign and prevents 180-degree flips.
+            var handOut = axisVector;
+            if (TryGetJointPose(leftHand, XRHandJointID.Wrist, out var wristPose))
+                handOut = middleWingRaw - wristPose.position;
+
+            var axis = GetStabilizedDirection(leftHand, axisFromContacts, indexWingRaw, middleWingRaw, handOut);
 
             var projectedDistance = Mathf.Abs(Vector3.Dot(axisVector, axis));
             if (projectedDistance < 0.0001f)
@@ -683,8 +691,13 @@ namespace UnityEngine.XR.Templates.MR
             return true;
         }
 
-        Vector3 GetStabilizedDirection(XRHand leftHand, Vector3 axisFromContacts, Vector3 indexWingRaw, Vector3 middleWingRaw)
+        Vector3 GetStabilizedDirection(XRHand leftHand, Vector3 axisFromContacts, Vector3 indexWingRaw, Vector3 middleWingRaw, Vector3 handOut)
         {
+            // Sign-correct the source axis up front so the hand-frame blend and grip calibration
+            // both inherit the correct (out-of-hand) orientation.
+            if (handOut.sqrMagnitude > 1e-7f && Vector3.Dot(axisFromContacts, handOut) < 0f)
+                axisFromContacts = -axisFromContacts;
+
             var axis = axisFromContacts;
 
             if (m_UseHandFrameDirectionAssist)
@@ -725,8 +738,18 @@ namespace UnityEngine.XR.Templates.MR
                 }
             }
 
-            if (m_HasSmoothedDirection && Vector3.Dot(axis, m_SmoothedDirection) < 0f)
+            // Anchor the sign to the non-invertible hand-out reference so the needle always points
+            // out of the hand. This replaces the old smoothed-direction guard, which would lock in a
+            // 180-degree flip by forcing later correct frames to match a stale reversed direction.
+            if (handOut.sqrMagnitude > 1e-7f)
+            {
+                if (Vector3.Dot(axis, handOut) < 0f)
+                    axis = -axis;
+            }
+            else if (m_HasSmoothedDirection && Vector3.Dot(axis, m_SmoothedDirection) < 0f)
+            {
                 axis = -axis;
+            }
 
             if (!m_HasSmoothedDirection)
             {

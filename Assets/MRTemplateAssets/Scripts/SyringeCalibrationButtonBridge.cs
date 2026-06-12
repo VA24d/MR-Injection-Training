@@ -47,6 +47,20 @@ namespace UnityEngine.XR.Templates.MR
             Intravenous,
         }
 
+        /// <summary>
+        /// How the syringe-vs-surface angle is derived. The needle is assumed to enter at the
+        /// target-spot center, which lets us pin one end of the lever to a stable point.
+        /// </summary>
+        public enum AngleEstimationMode
+        {
+            /// <summary>Angle of (plunger - snapped spot). Longest, most occlusion-stable lever.</summary>
+            LongLeverFromSpot,
+            /// <summary>Blend of the long-lever direction with the live needleTip-plunger axis.</summary>
+            FuseLeverAndAxis,
+            /// <summary>Live needleTip-plunger axis with extra temporal smoothing on the angle.</summary>
+            AxisWithSmoothing,
+        }
+
         [Header("Wrist menu removal")]
         [SerializeField]
         [Tooltip("When true, the MR template wrist menu root is disabled at startup (default matches previous always-on behavior).")]
@@ -67,6 +81,10 @@ namespace UnityEngine.XR.Templates.MR
 
         [SerializeField]
         HandOverlaySkeletonToggleBridge m_HandOverlayBridge;
+
+        [SerializeField]
+        [Tooltip("3D injection target guide. Auto-created at runtime if left empty.")]
+        InjectionTargetGuide m_TargetGuide;
 
         [Header("Stub behavior")]
         [SerializeField]
@@ -110,6 +128,44 @@ namespace UnityEngine.XR.Templates.MR
 
         [SerializeField]
         Vector2 m_IntravenousAngleRange = new Vector2(20f, 35f);
+
+        [Header("Per-type insertion depth (cm) — x = green/accurate, y = orange/max")]
+        [SerializeField]
+        [Tooltip("Intradermal correct (x) and max (y) needle depth in cm. Clamped to needle length 4.7 cm.")]
+        Vector2 m_IntradermalDepthCm = new Vector2(0.2f, 0.4f);
+
+        [SerializeField]
+        [Tooltip("Subcutaneous correct (x) and max (y) needle depth in cm.")]
+        Vector2 m_SubcutaneousDepthCm = new Vector2(0.8f, 1.2f);
+
+        [SerializeField]
+        [Tooltip("Intramuscular correct (x) and max (y) needle depth in cm.")]
+        Vector2 m_IntramuscularDepthCm = new Vector2(2.5f, 3.8f);
+
+        [SerializeField]
+        [Tooltip("Intravenous correct (x) and max (y) needle depth in cm.")]
+        Vector2 m_IntravenousDepthCm = new Vector2(1.0f, 1.5f);
+
+        [SerializeField]
+        [Tooltip("Fallback correct (x) and max (y) needle depth in cm when no type is selected.")]
+        Vector2 m_DefaultDepthCm = new Vector2(0.8f, 1.2f);
+
+        [Header("Angle estimation")]
+        [SerializeField]
+        [Tooltip("Source signal for the syringe-vs-surface angle. LongLeverFromSpot is the most occlusion-stable.")]
+        AngleEstimationMode m_AngleEstimationMode = AngleEstimationMode.LongLeverFromSpot;
+
+        [SerializeField, Range(0f, 1f)]
+        [Tooltip("FuseLeverAndAxis: weight of the live needleTip-plunger axis vs the long lever (0 = all lever).")]
+        float m_AngleFuseAxisWeight = 0.35f;
+
+        [SerializeField, Range(0f, 1f)]
+        [Tooltip("AxisWithSmoothing: temporal low-pass factor applied to the measured angle (higher = smoother/laggier).")]
+        float m_AngleSmoothing = 0.85f;
+
+        [SerializeField, Min(0.001f)]
+        [Tooltip("Needle tip must be within this distance (m) of the surface to lock the snapped contact point on first contact.")]
+        float m_ContactSnapDistanceMeters = 0.02f;
 
         [SerializeField, Min(0.1f)]
         float m_AngleHoldSeconds = 3f;
@@ -267,6 +323,15 @@ namespace UnityEngine.XR.Templates.MR
         float m_InitialPlungerToWingsDistanceCm;
         bool m_HasInitialPlungerDistance;
 
+        // Snapped injection geometry (needle assumed to enter at the target-spot center).
+        Vector3 m_InjectionContactPoint;
+        Vector3 m_LockedContactPoint;
+        Vector3 m_IdealInjectionAxis = Vector3.down;
+        bool m_HasContactPoint;
+        bool m_HasLockedContactPoint;
+        bool m_HasSmoothedAngle;
+        float m_SmoothedAngleDegrees;
+
         public TutorialStep currentStep => m_CurrentStep;
         public bool isTutorialRunning => m_IsTutorialRunning;
         public bool isFinished => m_IsFinished;
@@ -320,6 +385,26 @@ namespace UnityEngine.XR.Templates.MR
         public float angleHoldSecondsRemaining => Mathf.Max(0f, m_AngleHoldSeconds - m_AngleHoldProgress);
         public float minInsertionDepthCm => m_MinInsertionDepthCm;
         public float maxInsertionDepthCm => m_MaxInsertionDepthCm;
+
+        /// <summary>Accurate (green) needle depth in cm for the selected injection type.</summary>
+        public float currentInjectionGreenDepthCm => GetDepthRangeForSelectedType().x;
+        /// <summary>Max (orange) needle depth in cm for the selected injection type, capped at needle length.</summary>
+        public float currentInjectionMaxDepthCm => GetDepthRangeForSelectedType().y;
+        /// <summary>Midpoint of the selected type's valid angle range, in degrees from the surface.</summary>
+        public float idealInjectionAngleDegrees
+        {
+            get
+            {
+                var r = GetTargetInjectionAngleRangeForSelectedType();
+                return 0.5f * (r.x + r.y);
+            }
+        }
+        /// <summary>World-space point where the needle is assumed to enter (snapped to the target-spot center).</summary>
+        public Vector3 injectionContactPoint => m_InjectionContactPoint;
+        /// <summary>Whether a snapped contact point is currently available this frame.</summary>
+        public bool hasInjectionContactPoint => m_HasContactPoint;
+        /// <summary>Unit direction the needle ideally travels below the skin (nominal type angle).</summary>
+        public Vector3 idealInjectionAxis => m_IdealInjectionAxis;
         public bool hasCompletedInsertionDepth => m_HasCompletedInsertionDepth;
         public float maxLateralStabilityCmPerSec => m_MaxLateralStabilityCmPerSec;
         public float targetDispensePlungerRateCmPerSec => m_TargetDispensePlungerRateCmPerSec;
@@ -403,6 +488,11 @@ namespace UnityEngine.XR.Templates.MR
             m_InsertionStableHoldProgress = 0f;
             m_HasInitialPlungerDistance = false;
             m_DispenseElapsedSeconds = 0f;
+            m_HasContactPoint = false;
+            m_HasLockedContactPoint = false;
+            m_HasSmoothedAngle = false;
+            m_SmoothedAngleDegrees = 0f;
+            m_IdealInjectionAxis = Vector3.down;
 
             GoToStep(TutorialStep.Start);
         }
@@ -537,6 +627,14 @@ namespace UnityEngine.XR.Templates.MR
 
             if (m_HandOverlayBridge == null)
                 m_HandOverlayBridge = GetComponent<HandOverlaySkeletonToggleBridge>() ?? FindAnyObjectByType<HandOverlaySkeletonToggleBridge>();
+
+            if (m_TargetGuide == null)
+            {
+                m_TargetGuide = GetComponent<InjectionTargetGuide>() ?? FindAnyObjectByType<InjectionTargetGuide>();
+                // Runtime-create the guide if it isn't in the scene (avoids hand-editing the scene YAML).
+                if (m_TargetGuide == null)
+                    m_TargetGuide = gameObject.AddComponent<InjectionTargetGuide>();
+            }
         }
 
         void DisableWristMenu()
@@ -835,46 +933,48 @@ namespace UnityEngine.XR.Templates.MR
 
                 var plane = new Plane(normal, surfacePose.position);
 
-                // Injection angle is measured from the surface plane (0 = parallel to surface, 90 = perpendicular).
-                var alongSurface = Vector3.ProjectOnPlane(pose.forward, normal);
-                if (alongSurface.sqrMagnitude < 0.000001f)
-                    m_InjectionAngleDegrees = 90f;
-                else
-                    m_InjectionAngleDegrees = Vector3.Angle(alongSurface.normalized, pose.forward);
+                // The needle is assumed to enter at the target-spot center. Snapping the contact
+                // point there pins one end of the syringe to a stable, known location so depth and
+                // angle ride a long lever instead of the jittery, occlusion-prone needle tip.
+                var spot = surfacePose.position;
+                var snapStep = m_CurrentStep == TutorialStep.InjectionAngle ||
+                               m_CurrentStep == TutorialStep.InsertionSpeedFlowRate ||
+                               m_CurrentStep == TutorialStep.RemoveSpeed;
+                var lockStep = m_CurrentStep == TutorialStep.InsertionSpeedFlowRate ||
+                               m_CurrentStep == TutorialStep.RemoveSpeed;
+                var tipPlaneDistance = Mathf.Abs(plane.GetDistanceToPoint(pose.needleTip));
 
-                var signedTip = plane.GetDistanceToPoint(pose.needleTip);
-                var signedBase = plane.GetDistanceToPoint(pose.needleBase);
-                var needleLengthCm = Vector3.Distance(pose.needleTip, pose.needleBase) * 100f;
-
-                // Keep insertion goal strictly below the visible needle length.
-                var clampedNeedleTarget = Mathf.Max(0.06f, needleLengthCm * 0.65f);
-                m_EffectiveInsertionDepthTargetCm = Mathf.Min(m_MinInsertionDepthCm, clampedNeedleTarget, m_MaxInsertionDepthCm);
-
-                float penetrationCm;
-                if (signedTip * signedBase <= 0f)
+                // Once the needle first reaches the spot during insertion/removal, lock the entry so
+                // finger occlusion while inserted can't drag the contact point around.
+                if (lockStep && !m_HasLockedContactPoint && tipPlaneDistance <= m_ContactSnapDistanceMeters)
                 {
-                    // Needle segment crosses the plane; depth is bounded by the visible needle length.
-                    penetrationCm = Mathf.Min(Mathf.Abs(signedTip) * 100f, needleLengthCm);
-                }
-                else
-                {
-                    var inwardSign = Mathf.Sign(-Vector3.Dot(pose.forward, normal));
-                    if (Mathf.Approximately(inwardSign, 0f))
-                        inwardSign = -1f;
-
-                    var depthCandidate = inwardSign * signedTip * 100f;
-                    penetrationCm = Mathf.Clamp(depthCandidate, 0f, needleLengthCm);
+                    m_LockedContactPoint = spot;
+                    m_HasLockedContactPoint = true;
                 }
 
-                m_CurrentInsertionDepthCm = Mathf.Min(penetrationCm, m_MaxInsertionDepthCm);
+                m_InjectionContactPoint = m_HasLockedContactPoint ? m_LockedContactPoint : spot;
+                m_HasContactPoint = snapStep;
+
+                // Ideal needle path below the skin: nominal type angle, azimuth from the live syringe
+                // heading so the depth guide sits under where the user actually approaches.
+                m_IdealInjectionAxis = ComputeIdealInjectionAxis(normal, pose.forward);
+
+                // Angle (0 = parallel to surface, 90 = perpendicular) per the selected estimation mode.
+                m_InjectionAngleDegrees = ComputeInjectionAngleDegrees(pose, normal, m_InjectionContactPoint);
+
+                // Depth = inserted length along the ideal axis, measured from the snapped entry,
+                // capped at the per-type max (which is itself capped at needle length).
+                var depthCapCm = currentInjectionMaxDepthCm;
+                var depthAlongCm = Vector3.Dot(pose.needleTip - m_InjectionContactPoint, m_IdealInjectionAxis) * 100f;
+                m_CurrentInsertionDepthCm = Mathf.Clamp(depthAlongCm, 0f, depthCapCm);
+                m_EffectiveInsertionDepthTargetCm = Mathf.Min(currentInjectionGreenDepthCm, depthCapCm);
 
                 if (m_HasPreviousNeedleTip)
                 {
                     var needleVelocity = (pose.needleTip - m_PreviousNeedleTip) / dt;
-                    var inwardAxis = -normal * Mathf.Sign(-Vector3.Dot(pose.forward, normal));
-                    if (inwardAxis.sqrMagnitude < 0.000001f)
-                        inwardAxis = -normal;
-                    inwardAxis.Normalize();
+                    var inwardAxis = m_IdealInjectionAxis.sqrMagnitude > 0.000001f
+                        ? m_IdealInjectionAxis.normalized
+                        : -normal;
                     var axialCmPerSec = Vector3.Dot(needleVelocity, inwardAxis) * 100f;
                     var lateralCmPerSec = Vector3.ProjectOnPlane(needleVelocity, inwardAxis).magnitude * 100f;
 
@@ -888,6 +988,7 @@ namespace UnityEngine.XR.Templates.MR
                 m_CurrentInsertionDepthCm = 0f;
                 m_EffectiveInsertionDepthTargetCm = m_MinInsertionDepthCm;
                 m_CurrentLateralStabilityCmPerSec = 0f;
+                m_HasContactPoint = false;
             }
 
             if (m_HasPreviousNeedleTip)
@@ -999,6 +1100,8 @@ namespace UnityEngine.XR.Templates.MR
                 m_PlungerTravelNormalized = 0f;
                 m_HasInitialPlungerDistance = false;
                 m_HasPreviousNeedleTip = false;
+                // Re-arm the contact snap so it locks afresh on this insertion (removal keeps the lock).
+                m_HasLockedContactPoint = false;
             }
 
             if (nextStep == TutorialStep.RemoveSpeed)
@@ -1035,6 +1138,104 @@ namespace UnityEngine.XR.Templates.MR
 
             m_TargetInjectionAngleRange = range;
             return range;
+        }
+
+        /// <summary>Per-type (green, max) needle depth in cm. Green clamped below max; max clamped to needle length.</summary>
+        Vector2 GetDepthRangeForSelectedType()
+        {
+            var depth = m_SelectedInjectionType switch
+            {
+                InjectionType.Intramuscular => m_IntramuscularDepthCm,
+                InjectionType.Subcutaneous => m_SubcutaneousDepthCm,
+                InjectionType.Intradermal => m_IntradermalDepthCm,
+                InjectionType.Intravenous => m_IntravenousDepthCm,
+                _ => m_DefaultDepthCm,
+            };
+
+            // Needle metal is 4.7 cm; nothing can go deeper than the needle is long.
+            const float needleLengthCm = 4.7f;
+            depth.y = Mathf.Clamp(depth.y, 0.05f, needleLengthCm);
+            depth.x = Mathf.Clamp(depth.x, 0.02f, depth.y);
+            return depth;
+        }
+
+        /// <summary>
+        /// Unit direction the needle ideally travels below the surface for the selected type:
+        /// the nominal (range-midpoint) angle, with azimuth taken from the live syringe heading
+        /// so the depth guide lines up under the user's actual approach.
+        /// </summary>
+        Vector3 ComputeIdealInjectionAxis(Vector3 normal, Vector3 syringeForward)
+        {
+            var down = -normal;
+
+            // In-plane heading the user is approaching from (fallback: camera, then arbitrary).
+            var heading = Vector3.ProjectOnPlane(syringeForward, normal);
+            if (heading.sqrMagnitude < 0.000001f)
+            {
+                var cam = Camera.main;
+                if (cam != null)
+                    heading = Vector3.ProjectOnPlane(cam.transform.forward, normal);
+            }
+            if (heading.sqrMagnitude < 0.000001f)
+                heading = Vector3.ProjectOnPlane(Vector3.forward, normal);
+            if (heading.sqrMagnitude < 0.000001f)
+                return down;
+            heading.Normalize();
+
+            // Angle from the surface -> angle from the normal (0 = straight in, 90 = flat).
+            var fromSurface = Mathf.Clamp(idealInjectionAngleDegrees, 0f, 90f);
+            var fromNormalRad = (90f - fromSurface) * Mathf.Deg2Rad;
+            var axis = down * Mathf.Cos(fromNormalRad) + heading * Mathf.Sin(fromNormalRad);
+            return axis.sqrMagnitude < 0.000001f ? down : axis.normalized;
+        }
+
+        /// <summary>Angle of <paramref name="v"/> above the surface plane, 0 = parallel, 90 = perpendicular.</summary>
+        static float AngleFromSurface(Vector3 v, Vector3 normal)
+        {
+            var along = Vector3.ProjectOnPlane(v, normal);
+            if (along.sqrMagnitude < 0.000001f || v.sqrMagnitude < 0.000001f)
+                return 90f;
+            return Vector3.Angle(along.normalized, v.normalized);
+        }
+
+        /// <summary>
+        /// Syringe-vs-surface angle per <see cref="m_AngleEstimationMode"/>. The long-lever modes
+        /// use (plunger - snapped contact) as a stable, occlusion-resistant axis.
+        /// </summary>
+        float ComputeInjectionAngleDegrees(SyringeOverlayTracker.SyringePoseData pose, Vector3 normal, Vector3 contact)
+        {
+            var angleAxis = AngleFromSurface(pose.forward, normal);
+            var angleLever = AngleFromSurface(pose.plunger - contact, normal);
+
+            float measured;
+            switch (m_AngleEstimationMode)
+            {
+                case AngleEstimationMode.AxisWithSmoothing:
+                    measured = angleAxis;
+                    var t = 1f - Mathf.Clamp01(m_AngleSmoothing);
+                    if (!m_HasSmoothedAngle)
+                    {
+                        m_SmoothedAngleDegrees = measured;
+                        m_HasSmoothedAngle = true;
+                    }
+                    else
+                    {
+                        m_SmoothedAngleDegrees = Mathf.Lerp(m_SmoothedAngleDegrees, measured, t);
+                    }
+                    return m_SmoothedAngleDegrees;
+
+                case AngleEstimationMode.FuseLeverAndAxis:
+                    measured = Mathf.Lerp(angleLever, angleAxis, Mathf.Clamp01(m_AngleFuseAxisWeight));
+                    break;
+
+                case AngleEstimationMode.LongLeverFromSpot:
+                default:
+                    measured = angleLever;
+                    break;
+            }
+
+            m_HasSmoothedAngle = false;
+            return measured;
         }
 
 #if UNITY_EDITOR
