@@ -78,7 +78,7 @@ namespace UnityEngine.XR.Templates.MR
         float m_JointMarkerSize = 0.003f;
 
         [SerializeField]
-        bool m_DrawJointMarkers = true;
+        bool m_DrawJointMarkers = false;
 
         [SerializeField]
         [Tooltip("When false, syringe visual overlays are hidden while tracking data remains active.")]
@@ -333,6 +333,11 @@ namespace UnityEngine.XR.Templates.MR
 
         void Awake()
         {
+            // Force the redundant joint-marker dots off regardless of any stale serialized scene
+            // value. The syringe body is already drawn as lines, so the marker spheres only added
+            // floating dots that tracked the syringe. Re-enable in the Inspector if ever needed.
+            m_DrawJointMarkers = false;
+
             CreateOverlayVisuals();
             EnsureCameraReferences();
         }
