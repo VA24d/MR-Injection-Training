@@ -131,6 +131,9 @@ namespace UnityEngine.XR.Templates.MR
         string m_SkeletonToggleButtonName = "Skeleton Toggle Button";
 
         [SerializeField]
+        string m_SyringeOverlayToggleButtonName = "Syringe Overlay Toggle Button";
+
+        [SerializeField]
         string m_PreviousStepButtonName = "Previous Step Button";
 
         [SerializeField]
@@ -290,6 +293,12 @@ namespace UnityEngine.XR.Templates.MR
         Button m_SkeletonToggleButton;
         TextMeshProUGUI m_SkeletonToggleButtonLabel;
         string m_LastSkeletonToggleButtonText = string.Empty;
+        GameObject m_SyringeOverlayToggleButtonObject;
+        Button m_SyringeOverlayToggleButton;
+        TextMeshProUGUI m_SyringeOverlayToggleButtonLabel;
+        string m_LastSyringeOverlayToggleButtonText = string.Empty;
+        // User preference: show the cyan syringe overlay (needle). Default on; toggled by the button.
+        bool m_SyringeOverlayUserVisible = true;
         GameObject m_PreviousStepButtonObject;
         Button m_PreviousStepButton;
         TextMeshProUGUI m_PreviousStepButtonLabel;
@@ -863,6 +872,17 @@ namespace UnityEngine.XR.Templates.MR
                 m_SkeletonToggleButtonObject = skeletonExisting.gameObject;
             }
 
+            var syringeOverlayExisting = parent.Find(m_SyringeOverlayToggleButtonName);
+            if (syringeOverlayExisting == null)
+            {
+                m_SyringeOverlayToggleButtonObject = Instantiate(template, parent);
+                m_SyringeOverlayToggleButtonObject.name = m_SyringeOverlayToggleButtonName;
+            }
+            else
+            {
+                m_SyringeOverlayToggleButtonObject = syringeOverlayExisting.gameObject;
+            }
+
             var previousExisting = parent.Find(m_PreviousStepButtonName);
             if (previousExisting == null)
             {
@@ -937,6 +957,12 @@ namespace UnityEngine.XR.Templates.MR
                 OnSkeletonToggleButtonClicked);
 
             BindActionButton(
+                m_SyringeOverlayToggleButtonObject,
+                out m_SyringeOverlayToggleButton,
+                out m_SyringeOverlayToggleButtonLabel,
+                OnSyringeOverlayToggleButtonClicked);
+
+            BindActionButton(
                 m_PreviousStepButtonObject,
                 out m_PreviousStepButton,
                 out m_PreviousStepButtonLabel,
@@ -972,9 +998,10 @@ namespace UnityEngine.XR.Templates.MR
             m_CalibrateButtonObject.transform.SetSiblingIndex(Mathf.Min(baseIndex + 3, parent.childCount - 1));
             m_CreateSurfaceButtonObject.transform.SetSiblingIndex(Mathf.Min(baseIndex + 4, parent.childCount - 1));
             m_SkeletonToggleButtonObject.transform.SetSiblingIndex(Mathf.Min(baseIndex + 5, parent.childCount - 1));
-            m_SwapHandsButtonObject.transform.SetSiblingIndex(Mathf.Min(baseIndex + 6, parent.childCount - 1));
-            m_InjectionTypeButtonObject.transform.SetSiblingIndex(Mathf.Min(baseIndex + 7, parent.childCount - 1));
-            m_DemoVideoButtonObject.transform.SetSiblingIndex(Mathf.Min(baseIndex + 8, parent.childCount - 1));
+            m_SyringeOverlayToggleButtonObject.transform.SetSiblingIndex(Mathf.Min(baseIndex + 6, parent.childCount - 1));
+            m_SwapHandsButtonObject.transform.SetSiblingIndex(Mathf.Min(baseIndex + 7, parent.childCount - 1));
+            m_InjectionTypeButtonObject.transform.SetSiblingIndex(Mathf.Min(baseIndex + 8, parent.childCount - 1));
+            m_DemoVideoButtonObject.transform.SetSiblingIndex(Mathf.Min(baseIndex + 9, parent.childCount - 1));
 
             RelayoutVisibleActionBar();
             ApplyCoachingCardHeightForActionBar();
@@ -1052,6 +1079,7 @@ namespace UnityEngine.XR.Templates.MR
                 m_CalibrateButtonObject,
                 m_CreateSurfaceButtonObject,
                 m_SkeletonToggleButtonObject,
+                m_SyringeOverlayToggleButtonObject,
                 m_SwapHandsButtonObject,
                 m_InjectionTypeButtonObject,
                 m_DemoVideoButtonObject,
@@ -1190,6 +1218,7 @@ namespace UnityEngine.XR.Templates.MR
             Add(m_CalibrateButtonObject);
             Add(m_CreateSurfaceButtonObject);
             Add(m_SkeletonToggleButtonObject);
+            Add(m_SyringeOverlayToggleButtonObject);
             Add(m_SwapHandsButtonObject);
             Add(m_InjectionTypeButtonObject);
             Add(m_DemoVideoButtonObject);
@@ -1424,6 +1453,14 @@ namespace UnityEngine.XR.Templates.MR
             RefreshActionButtons(force: true);
         }
 
+        void OnSyringeOverlayToggleButtonClicked()
+        {
+            m_SyringeOverlayUserVisible = !m_SyringeOverlayUserVisible;
+            if (m_Tracker != null)
+                m_Tracker.SetOverlayVisualsEnabled(m_SyringeOverlayUserVisible);
+            RefreshActionButtons(force: true);
+        }
+
         void OnPreviousStepButtonClicked()
         {
             if (m_InjectionTutorial == null)
@@ -1568,6 +1605,16 @@ namespace UnityEngine.XR.Templates.MR
                     Set(m_DemoVideoButtonObject, false);
                     break;
             }
+
+            // The syringe-overlay toggle is offered wherever the needle is in play (calibration,
+            // type selection, and the fill/injection/removal steps) so the user can show/hide it.
+            Set(m_SyringeOverlayToggleButtonObject,
+                step == SyringeCalibrationButtonBridge.TutorialStep.Calibration ||
+                step == SyringeCalibrationButtonBridge.TutorialStep.InjectionType ||
+                step == SyringeCalibrationButtonBridge.TutorialStep.FillSyringe ||
+                step == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle ||
+                step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate ||
+                step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed);
         }
 
         /// <summary>
@@ -1592,6 +1639,8 @@ namespace UnityEngine.XR.Templates.MR
                 m_CreateSurfaceButtonObject.SetActive(active);
             if (m_SkeletonToggleButtonObject != null)
                 m_SkeletonToggleButtonObject.SetActive(active);
+            if (m_SyringeOverlayToggleButtonObject != null)
+                m_SyringeOverlayToggleButtonObject.SetActive(active);
             if (m_PreviousStepButtonObject != null)
                 m_PreviousStepButtonObject.SetActive(active);
             if (m_NextStepButtonObject != null)
@@ -1662,6 +1711,16 @@ namespace UnityEngine.XR.Templates.MR
                 {
                     m_SkeletonToggleButtonLabel.text = text;
                     m_LastSkeletonToggleButtonText = text;
+                }
+            }
+
+            if (m_SyringeOverlayToggleButtonLabel != null)
+            {
+                var text = m_SyringeOverlayUserVisible ? "Hide Syringe" : "Show Syringe";
+                if (force || !string.Equals(text, m_LastSyringeOverlayToggleButtonText, StringComparison.Ordinal))
+                {
+                    m_SyringeOverlayToggleButtonLabel.text = text;
+                    m_LastSyringeOverlayToggleButtonText = text;
                 }
             }
 
@@ -1864,11 +1923,14 @@ namespace UnityEngine.XR.Templates.MR
         {
             var showCalibrationOverlays = step == SyringeCalibrationButtonBridge.TutorialStep.Calibration;
 
+            // Hand skeleton stays calibration-only (it clutters the injection view).
             if (m_HandOverlayBridge != null)
                 m_HandOverlayBridge.SetSkeletonVisible(showCalibrationOverlays);
 
+            // The cyan syringe overlay follows the user's toggle preference (default on) across all
+            // steps, so the needle is visible during injection unless the user hides it.
             if (m_Tracker != null)
-                m_Tracker.SetOverlayVisualsEnabled(showCalibrationOverlays);
+                m_Tracker.SetOverlayVisualsEnabled(m_SyringeOverlayUserVisible);
         }
 
         void SyncTutorialToUI(bool force)

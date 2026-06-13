@@ -38,12 +38,17 @@ namespace UnityEngine.XR.Templates.MR
         [Tooltip("Needle-to-surface distance (m) at or beyond which the spot is at full size.")]
         float m_SpotShrinkRangeMeters = 0.12f;
 
-        [Header("Angle band (blue cones)")]
+        [Header("Angle band (blue cone)")]
         [SerializeField, Min(0.005f)]
-        float m_ConeHeight = 0.06f;
+        [Tooltip("Slant length of the valid-angle band (m) — how far it sits out from the spot. Fixed regardless of angle, so wide-angle types do not balloon.")]
+        float m_ConeSlantMeters = 0.06f;
 
         [SerializeField, Range(8, 64)]
         int m_ConeSegments = 32;
+
+        [SerializeField, Min(0)]
+        [Tooltip("Number of radial ribs (apex->rim spokes) drawn so the band reads as a cone anchored at the spot. 0 = no ribs.")]
+        int m_ConeRibCount = 12;
 
         [Header("Depth guide")]
         [SerializeField, Min(0.0005f)]
@@ -60,6 +65,10 @@ namespace UnityEngine.XR.Templates.MR
         Color m_BandColor = new Color(0.2f, 0.5f, 1f, 0.35f);
 
         [SerializeField]
+        [Tooltip("Band tint while the live injection angle is inside the type's valid range.")]
+        Color m_BandInRangeColor = new Color(0.22f, 0.95f, 0.55f, 0.45f);
+
+        [SerializeField]
         Color m_GreenColor = new Color(0.15f, 1f, 0.25f, 0.5f);
 
         [SerializeField]
@@ -70,19 +79,22 @@ namespace UnityEngine.XR.Templates.MR
 
         Transform m_Root;
         Transform m_Spot;
-        Transform m_OuterCone;
-        Transform m_InnerCone;
+        Transform m_ConeBand;
         Transform m_OrangePlane;
         LineRenderer m_GreenLine;
         LineRenderer m_RedLine;
+        LineRenderer m_ConeRibs;
 
         Mesh m_DiscMesh;
-        Mesh m_ConeMesh;
+        Mesh m_ConeBandMesh;
         Material m_SpotMat;
         Material m_BandMat;
         Material m_GreenMat;
         Material m_RedMat;
         Material m_OrangeMat;
+
+        // Cache so the band mesh is only rebuilt when the angle range changes.
+        Vector2 m_BuiltBandFromNormal = new Vector2(-1f, -1f);
 
         void Awake()
         {
@@ -106,7 +118,7 @@ namespace UnityEngine.XR.Templates.MR
             DestroySafe(m_RedMat);
             DestroySafe(m_OrangeMat);
             DestroySafe(m_DiscMesh);
-            DestroySafe(m_ConeMesh);
+            DestroySafe(m_ConeBandMesh);
         }
 
         void ResolveReferences()
@@ -126,9 +138,13 @@ namespace UnityEngine.XR.Templates.MR
             if (m_SurfaceSelectionTool == null || m_Tutorial == null)
                 return false;
 
+            // Show whenever a surface is placed, from the Injection Type screen through the injection
+            // steps — so the cone appears as soon as the surface exists and the user watches it change
+            // as they cycle injection type. Hidden only before type selection and at the score screen.
             var step = m_Tutorial.currentStep;
-            if (step != SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle &&
-                step != SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate)
+            if (step == SyringeCalibrationButtonBridge.TutorialStep.Start ||
+                step == SyringeCalibrationButtonBridge.TutorialStep.Calibration ||
+                step == SyringeCalibrationButtonBridge.TutorialStep.FinalScore)
                 return false;
 
             if (!m_SurfaceSelectionTool.TryGetPlacedSurface(out var surfacePose, out _))
@@ -153,15 +169,20 @@ namespace UnityEngine.XR.Templates.MR
             diameter = Mathf.Max(diameter, m_SpotMinDiameter);
             PlaceDisc(m_Spot, spot + normal * 0.001f, normal, diameter * 0.5f);
 
-            // Blue band: outer cone = shallowest valid angle, inner cone = steepest valid angle.
+            // Blue band: a slant ribbon between the steep (inner) and shallow (outer) valid angles,
+            // measured from the surface normal. Fixed slant from the spot, so it never balloons.
             var range = m_Tutorial.targetInjectionAngleRange;
-            var outerHalf = Mathf.Clamp(90f - range.x, 0.5f, 89f);
-            var innerHalf = Mathf.Clamp(90f - range.y, 0f, 89f);
-            PlaceCone(m_OuterCone, spot, normal, outerHalf, m_ConeHeight);
-            var showInner = innerHalf > 0.75f;
-            m_InnerCone.gameObject.SetActive(showInner);
-            if (showInner)
-                PlaceCone(m_InnerCone, spot, normal, innerHalf, m_ConeHeight);
+            var bandFromNormal = new Vector2(
+                Mathf.Clamp(90f - range.y, 0f, 89f),    // steepest valid (closest to the normal)
+                Mathf.Clamp(90f - range.x, 0.5f, 89f)); // shallowest valid
+            EnsureConeBandMesh(bandFromNormal);
+            m_ConeBand.SetPositionAndRotation(spot, Quaternion.FromToRotation(Vector3.up, normal));
+            BuildConeRibs(bandFromNormal);
+
+            // Tint the band green while the live injection angle is inside the valid range.
+            var angle = m_Tutorial.injectionAngleDegrees;
+            var inRange = angle >= range.x && angle <= range.y;
+            SetBandColor(inRange ? m_BandInRangeColor : m_BandColor);
 
             // Depth zones run along the ideal needle path (nominal type angle, live azimuth).
             var ideal = ComputeIdealInjectionAxis(normal, syringeForward);
@@ -209,12 +230,93 @@ namespace UnityEngine.XR.Templates.MR
             disc.localScale = new Vector3(radius, 1f, radius);
         }
 
-        void PlaceCone(Transform cone, Vector3 apex, Vector3 axisUp, float halfAngleDeg, float height)
+        // Unit direction at angleFromNormal degrees off local +Y (the surface normal), swept by azimuth.
+        static Vector3 ConeDirection(float angleFromNormalDeg, float azimuthRad)
         {
-            cone.position = apex;
-            cone.rotation = Quaternion.FromToRotation(Vector3.up, axisUp.normalized);
-            var radius = height * Mathf.Tan(halfAngleDeg * Mathf.Deg2Rad);
-            cone.localScale = new Vector3(radius, height, radius);
+            var a = angleFromNormalDeg * Mathf.Deg2Rad;
+            var s = Mathf.Sin(a);
+            return new Vector3(s * Mathf.Cos(azimuthRad), Mathf.Cos(a), s * Mathf.Sin(azimuthRad));
+        }
+
+        void EnsureConeBandMesh(Vector2 bandFromNormal)
+        {
+            if (Mathf.Approximately(bandFromNormal.x, m_BuiltBandFromNormal.x) &&
+                Mathf.Approximately(bandFromNormal.y, m_BuiltBandFromNormal.y))
+                return;
+
+            BuildConeBandMesh(m_ConeBandMesh, bandFromNormal, m_ConeSlantMeters);
+            m_BuiltBandFromNormal = bandFromNormal;
+        }
+
+        // Conical ribbon between the steep (x) and shallow (y) edges, at fixed slant from the apex.
+        void BuildConeBandMesh(Mesh mesh, Vector2 bandDeg, float slant)
+        {
+            mesh.Clear();
+            var seg = Mathf.Max(8, m_ConeSegments);
+            var verts = new Vector3[(seg + 1) * 2];
+            var tris = new int[seg * 12];
+
+            for (var i = 0; i <= seg; i++)
+            {
+                var az = (i / (float)seg) * Mathf.PI * 2f;
+                verts[i * 2] = ConeDirection(bandDeg.x, az) * slant;     // inner edge (steepest)
+                verts[i * 2 + 1] = ConeDirection(bandDeg.y, az) * slant; // outer edge (shallowest)
+            }
+
+            var t = 0;
+            for (var i = 0; i < seg; i++)
+            {
+                int a = i * 2, b = i * 2 + 1, c = (i + 1) * 2, d = (i + 1) * 2 + 1;
+                // Front faces.
+                tris[t++] = a; tris[t++] = c; tris[t++] = b;
+                tris[t++] = b; tris[t++] = c; tris[t++] = d;
+                // Back faces (double-sided so the band is visible from inside the cone too).
+                tris[t++] = b; tris[t++] = c; tris[t++] = a;
+                tris[t++] = d; tris[t++] = c; tris[t++] = b;
+            }
+
+            mesh.vertices = verts;
+            mesh.triangles = tris;
+            mesh.RecalculateBounds();
+        }
+
+        // Apex->rim->apex polyline (in band-local space) so the band reads as a cone anchored at the spot.
+        void BuildConeRibs(Vector2 bandDeg)
+        {
+            if (m_ConeRibs == null)
+                return;
+
+            var ribs = m_ConeRibCount;
+            if (ribs < 1)
+            {
+                m_ConeRibs.positionCount = 0;
+                return;
+            }
+
+            var mid = 0.5f * (bandDeg.x + bandDeg.y);
+            var points = new Vector3[ribs * 2 + 1];
+            var idx = 0;
+            points[idx++] = Vector3.zero;
+            for (var i = 0; i < ribs; i++)
+            {
+                var az = (i / (float)ribs) * Mathf.PI * 2f;
+                points[idx++] = ConeDirection(mid, az) * m_ConeSlantMeters;
+                points[idx++] = Vector3.zero;
+            }
+
+            m_ConeRibs.positionCount = points.Length;
+            m_ConeRibs.SetPositions(points);
+        }
+
+        void SetBandColor(Color color)
+        {
+            if (m_BandMat != null)
+                m_BandMat.color = color;
+            if (m_ConeRibs != null)
+            {
+                m_ConeRibs.startColor = color;
+                m_ConeRibs.endColor = color;
+            }
         }
 
         void SetLine(LineRenderer line, Vector3 a, Vector3 b, Color color)
@@ -243,7 +345,7 @@ namespace UnityEngine.XR.Templates.MR
             m_Root.SetParent(transform, false);
 
             m_DiscMesh = BuildDiscMesh(48);
-            m_ConeMesh = BuildConeMesh(Mathf.Max(8, m_ConeSegments));
+            m_ConeBandMesh = new Mesh { name = "GuideConeBand" }; // built on demand in EnsureConeBandMesh
 
             m_SpotMat = CreateColoredMaterial(m_SpotColor);
             m_BandMat = CreateColoredMaterial(m_BandColor);
@@ -252,12 +354,15 @@ namespace UnityEngine.XR.Templates.MR
             m_OrangeMat = CreateColoredMaterial(m_OrangeColor);
 
             m_Spot = CreateMeshObject("Injection Spot", m_DiscMesh, m_SpotMat);
-            m_OuterCone = CreateMeshObject("Angle Band Outer", m_ConeMesh, m_BandMat);
-            m_InnerCone = CreateMeshObject("Angle Band Inner", m_ConeMesh, m_BandMat);
+            m_ConeBand = CreateMeshObject("Angle Band", m_ConeBandMesh, m_BandMat);
             m_OrangePlane = CreateMeshObject("Max Depth Plane", m_DiscMesh, m_OrangeMat);
 
-            m_GreenLine = CreateLine("Correct Depth", m_GreenMat);
-            m_RedLine = CreateLine("Over Depth", m_RedMat);
+            m_GreenLine = CreateLine("Correct Depth", m_GreenMat, m_Root, worldSpace: true);
+            m_RedLine = CreateLine("Over Depth", m_RedMat, m_Root, worldSpace: true);
+            // Ribs live in the band's local space (apex at spot, +Y = surface normal).
+            m_ConeRibs = CreateLine("Angle Band Ribs", m_BandMat, m_ConeBand, worldSpace: false);
+            m_ConeRibs.startWidth = m_DepthLineWidth * 0.4f;
+            m_ConeRibs.endWidth = m_DepthLineWidth * 0.4f;
 
             SetVisible(false);
         }
@@ -276,14 +381,14 @@ namespace UnityEngine.XR.Templates.MR
             return go.transform;
         }
 
-        LineRenderer CreateLine(string name, Material material)
+        LineRenderer CreateLine(string name, Material material, Transform parent, bool worldSpace)
         {
             var go = new GameObject(name);
-            go.transform.SetParent(m_Root, false);
+            go.transform.SetParent(parent, false);
             var line = go.AddComponent<LineRenderer>();
             line.positionCount = 2;
             line.material = material;
-            line.useWorldSpace = true;
+            line.useWorldSpace = worldSpace;
             line.numCapVertices = 4;
             line.startWidth = m_DepthLineWidth;
             line.endWidth = m_DepthLineWidth;
@@ -321,41 +426,6 @@ namespace UnityEngine.XR.Templates.MR
             }
 
             var mesh = new Mesh { name = "GuideDisc" };
-            mesh.vertices = vertices;
-            mesh.triangles = triangles;
-            mesh.RecalculateNormals();
-            mesh.RecalculateBounds();
-            return mesh;
-        }
-
-        // Unit cone: apex at origin, ring at local +Y = 1 with radius 1, lateral surface, double-sided.
-        static Mesh BuildConeMesh(int segments)
-        {
-            segments = Mathf.Max(8, segments);
-            var vertices = new Vector3[segments + 1];
-            vertices[0] = Vector3.zero; // apex
-            for (var i = 0; i < segments; ++i)
-            {
-                var a = (i / (float)segments) * Mathf.PI * 2f;
-                vertices[i + 1] = new Vector3(Mathf.Cos(a), 1f, Mathf.Sin(a));
-            }
-
-            var triangles = new int[segments * 6];
-            var t = 0;
-            for (var i = 0; i < segments; ++i)
-            {
-                var ring = i + 1;
-                var ringNext = (i + 1) % segments + 1;
-                triangles[t++] = 0;
-                triangles[t++] = ring;
-                triangles[t++] = ringNext;
-                // Reverse face.
-                triangles[t++] = 0;
-                triangles[t++] = ringNext;
-                triangles[t++] = ring;
-            }
-
-            var mesh = new Mesh { name = "GuideCone" };
             mesh.vertices = vertices;
             mesh.triangles = triangles;
             mesh.RecalculateNormals();
