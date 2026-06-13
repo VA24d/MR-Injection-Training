@@ -171,6 +171,10 @@ namespace UnityEngine.XR.Templates.MR
         [Tooltip("Lateral radius (m) within which the rendered needle entry hard-locks to the site center. Passed to the tracker each frame.")]
         float m_CenterLockRadius = 0.03f;
 
+        [SerializeField]
+        [Tooltip("Absolute lock mode: the needle entry is ALWAYS pinned to the site center (zero lateral offset, no radius). Only insertion distance varies; angle is still measured from the hand. Toggled live from the coaching UI.")]
+        bool m_AbsoluteCenterLock = false;
+
         [SerializeField, Min(0.1f)]
         float m_AngleHoldSeconds = 3f;
 
@@ -343,6 +347,12 @@ namespace UnityEngine.XR.Templates.MR
         public float fillAmountNormalized => m_FillAmountNormalized;
         public float finalScore => m_FinalScore;
         public ScoreBreakdown lastScoreBreakdown => m_LastScoreBreakdown;
+
+        /// <summary>When true the needle entry is always pinned to the site center (distance-only mode).</summary>
+        public bool absoluteCenterLock => m_AbsoluteCenterLock;
+
+        /// <summary>Flips the lock mode (radius soft-lock &lt;-&gt; absolute center lock). Driven by the coaching UI button.</summary>
+        public void ToggleAbsoluteCenterLock() => m_AbsoluteCenterLock = !m_AbsoluteCenterLock;
 
         public float injectionAngleDegrees => m_InjectionAngleDegrees;
         public float insertionSpeedCmPerSec => m_InsertionSpeedCmPerSec;
@@ -961,7 +971,7 @@ namespace UnityEngine.XR.Templates.MR
 
                 // Drive the tracker's hard center-lock so the rendered needle (and this pose) snap
                 // their entry to the site center while near it.
-                m_Tracker.SetInjectionSnapTarget(spot, normal, m_CenterLockRadius, snapStep);
+                m_Tracker.SetInjectionSnapTarget(spot, normal, m_CenterLockRadius, snapStep, m_AbsoluteCenterLock);
 
                 // Ideal needle path below the skin: nominal type angle, azimuth from the live syringe
                 // heading so the depth guide sits under where the user actually approaches.
@@ -1050,13 +1060,22 @@ namespace UnityEngine.XR.Templates.MR
             if (m_IsFinished)
                 return;
 
-            var calibrationScore = (m_Tracker == null || m_Tracker.isMarkerCalibrated) ? 20f : 12f;
+            // Markerless trainer — the calibration step is grip/orientation only (marker assist is
+            // dormant), so isMarkerCalibrated is never set. Award full credit for reaching the end.
+            var calibrationScore = 20f;
             var typeScore = m_SelectedInjectionType == InjectionType.None ? 0f : 10f;
             var fillScore = Mathf.Clamp01(1f - Mathf.Abs(m_FillAmountNormalized - m_TargetFillAmount)) * 12f;
             var bubbleScore = m_BubbleCheckCompleted ? 10f : 0f;
             var surfaceCleanScore = m_SurfaceCleanCompleted ? 8f : 0f;
-            var angleMidpoint = 0.5f * (m_TargetInjectionAngleRange.x + m_TargetInjectionAngleRange.y);
-            var angleScore = Mathf.Clamp01(1f - Mathf.Abs(m_InjectionAngleDegrees - angleMidpoint) / 25f) * 12f;
+
+            // Angle: full credit anywhere inside the selected type's valid band (what the blue cone
+            // shows), tapering off outside it — so a wide-range type (IM) is not scored on the same
+            // fixed tolerance as a tight one (ID).
+            var angleRange = GetTargetInjectionAngleRangeForSelectedType();
+            var angleMidpoint = 0.5f * (angleRange.x + angleRange.y);
+            var angleHalfWidth = Mathf.Max(2f, 0.5f * (angleRange.y - angleRange.x));
+            var angleErrOutsideBand = Mathf.Max(0f, Mathf.Abs(m_InjectionAngleDegrees - angleMidpoint) - angleHalfWidth);
+            var angleScore = Mathf.Clamp01(1f - angleErrOutsideBand / Mathf.Max(8f, angleHalfWidth)) * 12f;
             var insertionScore = Mathf.Clamp01(1f - Mathf.Abs(m_InsertionSpeedCmPerSec - m_TargetInsertionSpeedCmPerSec) / 4f) * 8f;
             var flowScore = Mathf.Clamp01(1f - Mathf.Abs(m_FlowRateMlPerSec - m_TargetFlowRateMlPerSec) / 0.7f) * 5f;
             var removeSpeedQuality = Mathf.Clamp01(1f - Mathf.Abs(m_RemovalSpeedCmPerSec - m_TargetRemovalSpeedCmPerSec) / 4f);
@@ -1097,6 +1116,16 @@ namespace UnityEngine.XR.Templates.MR
                            nextStep == TutorialStep.RemoveSpeed;
             if (m_Tracker != null && !snapStep)
                 m_Tracker.SetInjectionSnapTarget(Vector3.zero, Vector3.up, 0f, false);
+
+            // View-placed target: as soon as the user reaches injection-type selection, drop the guide
+            // at the center of the field of view (facing them) so the example shows in front. Replaces
+            // the old pinch workflow; the Recenter button re-drops it later.
+            var needsTarget = nextStep == TutorialStep.InjectionType ||
+                              nextStep == TutorialStep.InjectionAngle ||
+                              nextStep == TutorialStep.InsertionSpeedFlowRate ||
+                              nextStep == TutorialStep.RemoveSpeed;
+            if (needsTarget && m_SurfaceSelectionTool != null && !m_SurfaceSelectionTool.hasPlacedSurface)
+                m_SurfaceSelectionTool.RecenterToView();
 
             if (nextStep == TutorialStep.InjectionAngle)
                 m_AngleHoldProgress = 0f;

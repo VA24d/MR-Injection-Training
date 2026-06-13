@@ -1404,45 +1404,26 @@ namespace UnityEngine.XR.Templates.MR
             }
         }
 
+        // Repurposed (marker calibration dormant): toggles the syringe center-lock mode between the
+        // radius soft-lock and the absolute "always at center, distance-only" lock.
         void OnCalibrateSyringeButtonClicked()
         {
-            if (m_Tracker == null)
+            if (m_InjectionTutorial == null)
                 return;
 
-            if (m_InjectionTutorial != null &&
-                m_InjectionTutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.Start)
-            {
-                // Flow is Start -> Injection Type -> Calibration; reach Calibration so calibration taps apply.
-                m_InjectionTutorial.AdvanceStep();
-                m_InjectionTutorial.AdvanceStep();
-            }
-
-            if (m_Tracker.isCalibratingMarker)
-            {
-                m_Tracker.CancelMarkerCalibration();
-            }
-            else
-            {
-                if (m_Tracker.isMarkerCalibrated)
-                    m_Tracker.ResetMarkerCalibration();
-
-                m_Tracker.StartMarkerCalibration();
-            }
-
+            m_InjectionTutorial.ToggleAbsoluteCenterLock();
             RefreshActionButtons(force: true);
             SyncTutorialToUI(force: true);
         }
 
+        // Repurposed (pinch placement dropped): drops/re-centers the injection target at the center
+        // of the field of view, facing the user.
         void OnCreateSurfaceButtonClicked()
         {
             if (m_SurfaceSelectionTool == null)
                 return;
 
-            if (m_SurfaceSelectionTool.isSelectingSurface)
-                m_SurfaceSelectionTool.CancelSurfaceSelection();
-            else
-                m_SurfaceSelectionTool.BeginSurfaceSelection();
-
+            m_SurfaceSelectionTool.RecenterToView();
             RefreshActionButtons(force: true);
         }
 
@@ -1622,6 +1603,20 @@ namespace UnityEngine.XR.Templates.MR
                 step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed;
             Set(m_SyringeOverlayToggleButtonObject, syringeRelatedStep);
             Set(m_SkeletonToggleButtonObject, syringeRelatedStep);
+
+            // Repurposed buttons (run after the switch so they override the per-case Set calls):
+            //  - "Calibrate" -> Lock-Mode toggle: only on the snap steps where the center-lock runs.
+            //  - "Create Surface" -> Recenter target: wherever a target is in play.
+            var lockStep =
+                step == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle ||
+                step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate ||
+                step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed;
+            Set(m_CalibrateButtonObject, lockStep);
+
+            var targetStep = lockStep ||
+                step == SyringeCalibrationButtonBridge.TutorialStep.InjectionType ||
+                step == SyringeCalibrationButtonBridge.TutorialStep.FillSyringe;
+            Set(m_CreateSurfaceButtonObject, targetStep);
         }
 
         /// <summary>
@@ -1782,32 +1777,19 @@ namespace UnityEngine.XR.Templates.MR
             }
         }
 
+        // Repurposed as the lock-mode toggle.
         string BuildCalibrateButtonLabel()
         {
-            if (m_Tracker == null)
-                return m_CalibrateIdleLabel;
-
-            if (m_Tracker.isCalibratingMarker)
-                return $"{m_CalibratingLabelPrefix} ({m_Tracker.calibrationTapCount}/{m_Tracker.requiredCalibrationTaps})";
-
-            if (m_Tracker.isMarkerCalibrated)
-                return m_CalibratedLabel;
-
-            return m_CalibrateIdleLabel;
+            var absolute = m_InjectionTutorial != null && m_InjectionTutorial.absoluteCenterLock;
+            return absolute ? "Lock: Center" : "Lock: Soft";
         }
 
+        // Repurposed as the recenter-target button.
         string BuildCreateSurfaceButtonLabel()
         {
-            if (m_SurfaceSelectionTool == null)
-                return m_CreateSurfaceIdleLabel;
-
-            if (m_SurfaceSelectionTool.isSelectingSurface)
-                return m_CreateSurfaceSelectingLabel;
-
-            if (m_SurfaceSelectionTool.hasPlacedSurface)
-                return m_CreateSurfacePlacedLabel;
-
-            return m_CreateSurfaceIdleLabel;
+            return m_SurfaceSelectionTool != null && m_SurfaceSelectionTool.hasPlacedSurface
+                ? "Recenter Target"
+                : "Place Target";
         }
 
         string BuildSkeletonToggleButtonLabel()
@@ -1990,6 +1972,15 @@ namespace UnityEngine.XR.Templates.MR
 
             if (m_SkipButton != null)
                 m_SkipButton.SetActive(showLegacyStepButton && !finished);
+
+            // In action-bar mode the custom Previous/Next pair is the only navigation, so hide the
+            // legacy primary "Continue/Next" poke button — otherwise it duplicates Next.
+            if (!showLegacyStepButton && m_StepButtonTextField != null)
+            {
+                var primaryButton = m_StepButtonTextField.GetComponentInParent<Button>(true);
+                if (primaryButton != null)
+                    primaryButton.gameObject.SetActive(false);
+            }
 
             ApplyActionButtonVisibilityForStep(step);
             RelayoutVisibleActionBar();

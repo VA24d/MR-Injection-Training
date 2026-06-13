@@ -327,6 +327,9 @@ namespace UnityEngine.XR.Templates.MR
 
         // Center-lock state (driven by SetInjectionSnapTarget).
         bool m_SnapActive;
+        // Absolute mode: needle entry is ALWAYS pinned to the center (no radius gate, no hysteresis,
+        // no angle damping). Only insertion distance varies; the measured angle still comes from the hand.
+        bool m_AbsoluteLock;
         Vector3 m_SnapCenter;
         Vector3 m_SnapNormal = Vector3.up;
         float m_SnapRadius = 0.03f;
@@ -360,6 +363,12 @@ namespace UnityEngine.XR.Templates.MR
             // value. The syringe body is already drawn as lines, so the marker spheres only added
             // floating dots that tracked the syringe. Re-enable in the Inspector if ever needed.
             m_DrawJointMarkers = false;
+
+            // Hand tracking on the held syringe is noisy. Force the axis to come predominantly from
+            // the stable hand frame (not per-frame wing angle) and apply a strong low-pass, ignoring
+            // any stale serialized scene values so reconstruction stays steady on every device.
+            m_HandFrameDirectionBlend = 0.9f;
+            m_DirectionSmoothing = 0.8f;
 
             CreateOverlayVisuals();
             EnsureCameraReferences();
@@ -516,9 +525,10 @@ namespace UnityEngine.XR.Templates.MR
         /// Sets the injection-site center the rendered needle should hard-lock its entry to when
         /// close. Called each frame by the tutorial during the angle/insertion/removal steps.
         /// </summary>
-        public void SetInjectionSnapTarget(Vector3 center, Vector3 surfaceNormal, float lockRadius, bool active)
+        public void SetInjectionSnapTarget(Vector3 center, Vector3 surfaceNormal, float lockRadius, bool active, bool absolute = false)
         {
             m_SnapActive = active;
+            m_AbsoluteLock = absolute;
             m_SnapCenter = center;
             m_SnapNormal = surfaceNormal.sqrMagnitude > 1e-6f ? surfaceNormal.normalized : Vector3.up;
             m_SnapRadius = Mathf.Max(0f, lockRadius);
@@ -560,11 +570,19 @@ namespace UnityEngine.XR.Templates.MR
             var entry = m_SmoothedPoints.needleTip + axis * s;
             var lateralDist = Vector3.ProjectOnPlane(m_SnapCenter - entry, m_SnapNormal).magnitude;
 
-            // Hysteresis: engage within radius, release only past radius + margin.
-            if (!m_CenterLockEngaged)
-                m_CenterLockEngaged = lateralDist <= m_SnapRadius;
-            else if (lateralDist > m_SnapRadius + m_CenterLockReleaseMargin)
-                m_CenterLockEngaged = false;
+            if (m_AbsoluteLock)
+            {
+                // Always pinned: no radius gate, no hysteresis.
+                m_CenterLockEngaged = true;
+            }
+            else
+            {
+                // Hysteresis: engage within radius, release only past radius + margin.
+                if (!m_CenterLockEngaged)
+                    m_CenterLockEngaged = lateralDist <= m_SnapRadius;
+                else if (lateralDist > m_SnapRadius + m_CenterLockReleaseMargin)
+                    m_CenterLockEngaged = false;
+            }
 
             if (!m_CenterLockEngaged)
             {
@@ -572,14 +590,24 @@ namespace UnityEngine.XR.Templates.MR
                 return;
             }
 
-            // Angle damp: hold the axis steady while locked.
-            if (!m_HasLockedDir)
+            Vector3 dampedAxis;
+            if (m_AbsoluteLock)
             {
-                m_LockedDir = axis;
-                m_HasLockedDir = true;
+                // Angle still measured from the hand (no damping) — only lateral is forced.
+                dampedAxis = axis;
+                m_HasLockedDir = false;
             }
-            var dampedAxis = Vector3.Slerp(axis, m_LockedDir, m_CenterLockAngleDamping).normalized;
-            m_LockedDir = dampedAxis; // slowly follows the held direction
+            else
+            {
+                // Angle damp: hold the axis steady while locked.
+                if (!m_HasLockedDir)
+                {
+                    m_LockedDir = axis;
+                    m_HasLockedDir = true;
+                }
+                dampedAxis = Vector3.Slerp(axis, m_LockedDir, m_CenterLockAngleDamping).normalized;
+                m_LockedDir = dampedAxis; // slowly follows the held direction
+            }
 
             // Re-derive the syringe along the damped axis from the plunger (consistent lengths).
             var spanToWings = Vector3.Distance(plunger, m_SmoothedPoints.wingsCenter);

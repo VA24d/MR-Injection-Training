@@ -9,6 +9,15 @@ namespace UnityEngine.XR.Templates.MR
     /// </summary>
     public class SurfaceSelectionTool : MonoBehaviour
     {
+        [Header("View placement")]
+        [SerializeField, Min(0.1f)]
+        [Tooltip("Distance (m) in front of the headset at which RecenterToView drops the target.")]
+        float m_ViewPlaceDistance = 0.45f;
+
+        [SerializeField, Min(0.02f)]
+        [Tooltip("Diameter (m) of the view-placed target surface.")]
+        float m_ViewSurfaceDiameter = 0.12f;
+
         [Header("Pinch input")]
         [SerializeField, Min(0.005f)]
         float m_PinchEngageDistance = 0.018f;
@@ -184,6 +193,61 @@ namespace UnityEngine.XR.Templates.MR
                 m_FirstSegmentLine.enabled = false;
             if (m_SecondSegmentLine != null)
                 m_SecondSegmentLine.enabled = false;
+        }
+
+        /// <summary>Drops the target surface at the center of the headset's field of view, facing the
+        /// user. Replaces the pinch workflow; also used by the Recenter button.</summary>
+        public void RecenterToView()
+        {
+            var cam = Camera.main;
+            if (cam != null)
+                PlaceSurfaceAtView(cam, m_ViewPlaceDistance, m_ViewSurfaceDiameter);
+        }
+
+        /// <summary>True once a target has been placed (pinch or view).</summary>
+        public void PlaceSurfaceAtView(Camera cam, float distance, float diameter)
+        {
+            if (m_SurfacePlane == null || cam == null)
+                return;
+
+            var camT = cam.transform;
+            var center = camT.position + camT.forward * Mathf.Max(0.1f, distance);
+
+            // Surface normal faces the user so the needle approaches from the user's side and the
+            // depth channel runs away from them (into the virtual body).
+            var normal = camT.position - center;
+            normal = normal.sqrMagnitude > 1e-6f ? normal.normalized : Vector3.up;
+
+            var planeRight = Vector3.ProjectOnPlane(camT.right, normal);
+            if (planeRight.sqrMagnitude < 1e-6f)
+                planeRight = Vector3.ProjectOnPlane(Vector3.right, normal);
+            planeRight.Normalize();
+            var planeForward = Vector3.Cross(planeRight, normal).normalized;
+
+            m_IsSelectingSurface = false;
+            m_PinchEngaged = false;
+            m_HasFirstPoint = false;
+            m_HasSecondPoint = false;
+            m_HasPlacedSurface = true;
+            m_IsDraggingHeightHandle = false;
+
+            m_SurfacePlane.position = center;
+            m_SurfacePlane.rotation = Quaternion.LookRotation(planeForward, normal);
+            m_SurfacePlane.localScale = new Vector3(diameter / 10f, 1f, diameter / 10f);
+            m_SurfacePlane.gameObject.SetActive(true);
+
+            // No pinch dots / segments / height handle for a view-placed target.
+            if (m_FirstPointDot != null)
+                m_FirstPointDot.gameObject.SetActive(false);
+            if (m_SecondPointDot != null)
+                m_SecondPointDot.gameObject.SetActive(false);
+            if (m_ThirdPointDot != null)
+                m_ThirdPointDot.gameObject.SetActive(false);
+            if (m_FirstSegmentLine != null)
+                m_FirstSegmentLine.enabled = false;
+            if (m_SecondSegmentLine != null)
+                m_SecondSegmentLine.enabled = false;
+            SetHeightHandleVisible(false);
         }
 
         public void ClearPlacedSurface()

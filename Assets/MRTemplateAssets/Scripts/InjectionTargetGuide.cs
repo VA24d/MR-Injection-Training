@@ -182,7 +182,8 @@ namespace UnityEngine.XR.Templates.MR
                 if (!m_PreviewActive)
                 {
                     var cam = m_MainCamera.transform;
-                    m_PreviewSpot = cam.position + cam.forward * 0.5f - cam.up * 0.1f;
+                    // Squarely in front of the user (matches the view-placed target distance).
+                    m_PreviewSpot = cam.position + cam.forward * 0.45f;
                     var heading = Vector3.ProjectOnPlane(cam.forward, Vector3.up);
                     m_PreviewHeading = heading.sqrMagnitude > 0.000001f ? heading.normalized : Vector3.forward;
                     m_PreviewActive = true;
