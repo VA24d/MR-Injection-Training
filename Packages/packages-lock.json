@@ -8,14 +8,14 @@
         "com.unity.nuget.newtonsoft-json": "3.0.2",
         "com.unity.test-framework": "1.1.31"
       },
-      "hash": "73eb27aeccfa8e0676eaf3304136e9b85953d913"
+      "hash": "78ee5418415953b79c358bfe6355fcc3fde7912b"
     },
     "com.github-glitchenzo.nugetforunity": {
       "version": "https://github.com/GlitchEnzo/NuGetForUnity.git?path=/src/NuGetForUnity",
       "depth": 0,
       "source": "git",
       "dependencies": {},
-      "hash": "c2af83c9d4f8cdaada9d4a0e94de2f195d8e1d01"
+      "hash": "acc1c7bc9ea34c33b830e40316fca52553878d29"
     },
     "com.meta.xr.mrutilitykit": {
       "version": "201.0.0",
@@ -130,7 +130,7 @@
       "url": "https://packages.unity.com"
     },
     "com.unity.burst": {
-      "version": "1.8.27",
+      "version": "1.8.28",
       "depth": 2,
       "source": "registry",
       "dependencies": {
@@ -140,7 +140,7 @@
       "url": "https://packages.unity.com"
     },
     "com.unity.cinemachine": {
-      "version": "3.1.6",
+      "version": "3.1.7",
       "depth": 0,
       "source": "registry",
       "dependencies": {
@@ -269,7 +269,7 @@
       "url": "https://packages.unity.com"
     },
     "com.unity.probuilder": {
-      "version": "6.0.9",
+      "version": "6.1.2",
       "depth": 0,
       "source": "registry",
       "dependencies": {
