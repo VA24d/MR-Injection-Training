@@ -42,6 +42,22 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField, Min(0.0002f)]
         float m_LineWidth = 0.0028f;
 
+        [Header("Height handle")]
+        [SerializeField, Min(0.005f)]
+        float m_HandleGrabRadius = 0.035f;
+
+        [SerializeField, Min(0.02f)]
+        float m_HandleStemHeight = 0.06f;
+
+        [SerializeField, Min(0.001f)]
+        float m_HandleStemWidth = 0.004f;
+
+        [SerializeField, Min(0.001f)]
+        float m_HandleKnobSize = 0.012f;
+
+        [SerializeField]
+        Color m_HandleColor = new Color(1f, 0.72f, 0.18f, 0.95f);
+
         public bool isSelectingSurface => m_IsSelectingSurface;
         public bool hasPlacedSurface => m_HasPlacedSurface;
         public int completedPinches => m_HasPlacedSurface ? 3 : (m_HasSecondPoint ? 2 : (m_HasFirstPoint ? 1 : 0));
@@ -72,8 +88,12 @@ namespace UnityEngine.XR.Templates.MR
         Transform m_SurfacePlane;
         LineRenderer m_FirstSegmentLine;
         LineRenderer m_SecondSegmentLine;
+        Transform m_HeightHandleRoot;
+        Transform m_HeightHandleKnob;
+        LineRenderer m_HeightHandleStem;
 
         Material m_RuntimePointMaterial;
+        Material m_RuntimeHandleMaterial;
         Material m_RuntimeLineMaterial;
         Material m_RuntimeSurfaceMaterial;
 
@@ -82,6 +102,9 @@ namespace UnityEngine.XR.Templates.MR
         bool m_HasSecondPoint;
         bool m_HasPlacedSurface;
         bool m_PinchEngaged;
+        bool m_IsDraggingHeightHandle;
+        float m_HeightDragStartY;
+        float m_HeightDragSurfaceStartY;
 
         Vector3 m_FirstPoint;
         Vector3 m_SecondPoint;
@@ -95,11 +118,16 @@ namespace UnityEngine.XR.Templates.MR
 
         void Update()
         {
-            if (!m_IsSelectingSurface)
-                return;
-
             EnsureHandSubsystem();
-            ProcessSelectionStep();
+
+            if (m_IsSelectingSurface)
+            {
+                ProcessSelectionStep();
+                return;
+            }
+
+            if (m_HasPlacedSurface)
+                ProcessHeightHandleDrag();
         }
 
         void OnDestroy()
@@ -110,6 +138,8 @@ namespace UnityEngine.XR.Templates.MR
                 Destroy(m_RuntimeLineMaterial);
             if (m_RuntimeSurfaceMaterial != null)
                 Destroy(m_RuntimeSurfaceMaterial);
+            if (m_RuntimeHandleMaterial != null)
+                Destroy(m_RuntimeHandleMaterial);
         }
 
         public void BeginSurfaceSelection()
@@ -128,6 +158,8 @@ namespace UnityEngine.XR.Templates.MR
                 m_ThirdPointDot.gameObject.SetActive(false);
             if (m_SurfacePlane != null)
                 m_SurfacePlane.gameObject.SetActive(false);
+            SetHeightHandleVisible(false);
+            m_IsDraggingHeightHandle = false;
             if (m_FirstSegmentLine != null)
                 m_FirstSegmentLine.enabled = false;
             if (m_SecondSegmentLine != null)
@@ -140,6 +172,7 @@ namespace UnityEngine.XR.Templates.MR
             m_PinchEngaged = false;
             m_HasFirstPoint = false;
             m_HasSecondPoint = false;
+            m_IsDraggingHeightHandle = false;
 
             if (m_FirstPointDot != null)
                 m_FirstPointDot.gameObject.SetActive(false);
@@ -169,6 +202,8 @@ namespace UnityEngine.XR.Templates.MR
                 m_ThirdPointDot.gameObject.SetActive(false);
             if (m_SurfacePlane != null)
                 m_SurfacePlane.gameObject.SetActive(false);
+            SetHeightHandleVisible(false);
+            m_IsDraggingHeightHandle = false;
             if (m_FirstSegmentLine != null)
                 m_FirstSegmentLine.enabled = false;
             if (m_SecondSegmentLine != null)
@@ -397,6 +432,116 @@ namespace UnityEngine.XR.Templates.MR
             m_SurfacePlane.rotation = Quaternion.LookRotation(forward, Vector3.up);
             m_SurfacePlane.localScale = new Vector3(width / 10f, 1f, depth / 10f);
             m_SurfacePlane.gameObject.SetActive(true);
+            UpdateHeightHandleVisual();
+            SetHeightHandleVisible(true);
+        }
+
+        void ProcessHeightHandleDrag()
+        {
+            UpdateHeightHandleVisual();
+
+            if (!TryGetPinchPose(out var pinchPoint, out var pinchDistance))
+            {
+                m_IsDraggingHeightHandle = false;
+                return;
+            }
+
+            if (m_IsDraggingHeightHandle)
+            {
+                if (pinchDistance >= m_PinchReleaseDistance)
+                {
+                    m_IsDraggingHeightHandle = false;
+                    return;
+                }
+
+                var deltaY = pinchPoint.y - m_HeightDragStartY;
+                ApplySurfaceVerticalOffset(m_HeightDragSurfaceStartY + deltaY);
+                return;
+            }
+
+            if (pinchDistance > m_PinchEngageDistance)
+                return;
+
+            var handleGrabPoint = GetHeightHandleGrabPoint();
+            if (Vector3.Distance(pinchPoint, handleGrabPoint) > m_HandleGrabRadius)
+                return;
+
+            m_IsDraggingHeightHandle = true;
+            m_HeightDragStartY = pinchPoint.y;
+            m_HeightDragSurfaceStartY = m_SurfacePlane.position.y;
+        }
+
+        void ApplySurfaceVerticalOffset(float targetY)
+        {
+            if (m_SurfacePlane == null)
+                return;
+
+            var deltaY = targetY - m_SurfacePlane.position.y;
+            if (Mathf.Abs(deltaY) < 0.000001f)
+                return;
+
+            m_SurfacePlane.position += Vector3.up * deltaY;
+            m_FirstPoint += Vector3.up * deltaY;
+            m_SecondPoint += Vector3.up * deltaY;
+            m_ThirdPoint += Vector3.up * deltaY;
+
+            if (m_FirstPointDot != null)
+                m_FirstPointDot.position = m_FirstPoint;
+            if (m_SecondPointDot != null)
+                m_SecondPointDot.position = m_SecondPoint;
+            if (m_ThirdPointDot != null)
+                m_ThirdPointDot.position = m_ThirdPoint;
+
+            if (m_FirstSegmentLine != null)
+            {
+                m_FirstSegmentLine.SetPosition(0, m_FirstPoint);
+                m_FirstSegmentLine.SetPosition(1, m_SecondPoint);
+            }
+
+            if (m_SecondSegmentLine != null)
+            {
+                m_SecondSegmentLine.SetPosition(0, m_SecondPoint);
+                m_SecondSegmentLine.SetPosition(1, m_ThirdPoint);
+            }
+
+            UpdateHeightHandleVisual();
+        }
+
+        Vector3 GetHeightHandleGrabPoint()
+        {
+            if (m_HeightHandleKnob != null)
+                return m_HeightHandleKnob.position;
+
+            return m_SurfacePlane != null ? m_SurfacePlane.position : transform.position;
+        }
+
+        void UpdateHeightHandleVisual()
+        {
+            if (m_HeightHandleRoot == null || m_SurfacePlane == null || !m_HasPlacedSurface)
+                return;
+
+            m_HeightHandleRoot.position = m_SurfacePlane.position;
+            m_HeightHandleRoot.rotation = m_SurfacePlane.rotation;
+
+            var halfWidth = Mathf.Abs(m_SurfacePlane.lossyScale.x) * 5f;
+            var edgeLocal = new Vector3(halfWidth, 0f, 0f);
+            var edgeWorld = m_HeightHandleRoot.TransformPoint(edgeLocal);
+            var stemTop = edgeWorld + Vector3.up * m_HandleStemHeight;
+
+            if (m_HeightHandleStem != null)
+            {
+                m_HeightHandleStem.SetPosition(0, edgeWorld);
+                m_HeightHandleStem.SetPosition(1, stemTop);
+            }
+
+            if (m_HeightHandleKnob != null)
+                m_HeightHandleKnob.position = stemTop;
+        }
+
+        void SetHeightHandleVisible(bool visible)
+        {
+            if (m_HeightHandleRoot != null)
+                m_HeightHandleRoot.gameObject.SetActive(visible);
         }
 
         void CreateVisuals()
@@ -420,6 +565,17 @@ namespace UnityEngine.XR.Templates.MR
 
             m_FirstSegmentLine = CreateLine("Surface Selection Line A-B", m_RuntimeLineMaterial);
             m_SecondSegmentLine = CreateLine("Surface Selection Line B-C", m_RuntimeLineMaterial);
+
+            m_RuntimeHandleMaterial = CreateUnlitMaterial(m_HandleColor);
+            m_HeightHandleRoot = new GameObject("Surface Height Handle").transform;
+            m_HeightHandleRoot.SetParent(m_SurfaceRoot, false);
+            m_HeightHandleStem = CreateLine("Surface Height Handle Stem", m_RuntimeHandleMaterial);
+            m_HeightHandleStem.startWidth = m_HandleStemWidth;
+            m_HeightHandleStem.endWidth = m_HandleStemWidth;
+            m_HeightHandleStem.transform.SetParent(m_HeightHandleRoot, false);
+            m_HeightHandleKnob = CreatePoint("Surface Height Handle Knob", m_RuntimeHandleMaterial, m_HandleKnobSize);
+            m_HeightHandleKnob.SetParent(m_HeightHandleRoot, false);
+            SetHeightHandleVisible(false);
 
             var planeObject = GameObject.CreatePrimitive(PrimitiveType.Plane);
             planeObject.name = "Selected Surface Plane";
