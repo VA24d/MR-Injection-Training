@@ -167,6 +167,10 @@ namespace UnityEngine.XR.Templates.MR
         [Tooltip("Needle tip must be within this distance (m) of the surface to lock the snapped contact point on first contact.")]
         float m_ContactSnapDistanceMeters = 0.02f;
 
+        [SerializeField, Min(0f)]
+        [Tooltip("Lateral radius (m) within which the rendered needle entry hard-locks to the site center. Passed to the tracker each frame.")]
+        float m_CenterLockRadius = 0.03f;
+
         [SerializeField, Min(0.1f)]
         float m_AngleHoldSeconds = 3f;
 
@@ -955,6 +959,10 @@ namespace UnityEngine.XR.Templates.MR
                 m_InjectionContactPoint = m_HasLockedContactPoint ? m_LockedContactPoint : spot;
                 m_HasContactPoint = snapStep;
 
+                // Drive the tracker's hard center-lock so the rendered needle (and this pose) snap
+                // their entry to the site center while near it.
+                m_Tracker.SetInjectionSnapTarget(spot, normal, m_CenterLockRadius, snapStep);
+
                 // Ideal needle path below the skin: nominal type angle, azimuth from the live syringe
                 // heading so the depth guide sits under where the user actually approaches.
                 m_IdealInjectionAxis = ComputeIdealInjectionAxis(normal, pose.forward);
@@ -989,6 +997,7 @@ namespace UnityEngine.XR.Templates.MR
                 m_EffectiveInsertionDepthTargetCm = m_MinInsertionDepthCm;
                 m_CurrentLateralStabilityCmPerSec = 0f;
                 m_HasContactPoint = false;
+                m_Tracker.SetInjectionSnapTarget(Vector3.zero, Vector3.up, 0f, false);
             }
 
             if (m_HasPreviousNeedleTip)
@@ -1080,6 +1089,14 @@ namespace UnityEngine.XR.Templates.MR
         {
             m_CurrentStep = nextStep;
             m_StepElapsedSeconds = 0f;
+
+            // Release the tracker center-lock outside the angle/insertion/removal steps so the needle
+            // is not snapped to a site on unrelated steps.
+            var snapStep = nextStep == TutorialStep.InjectionAngle ||
+                           nextStep == TutorialStep.InsertionSpeedFlowRate ||
+                           nextStep == TutorialStep.RemoveSpeed;
+            if (m_Tracker != null && !snapStep)
+                m_Tracker.SetInjectionSnapTarget(Vector3.zero, Vector3.up, 0f, false);
 
             if (nextStep == TutorialStep.InjectionAngle)
                 m_AngleHoldProgress = 0f;

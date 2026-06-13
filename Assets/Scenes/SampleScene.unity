@@ -710,8 +710,8 @@ MonoBehaviour:
   m_PositionSmoothing: 0.35
   m_UseHandFrameDirectionAssist: 1
   m_TrackLeftHand: 1
-  m_HandFrameDirectionBlend: 0.65
-  m_DirectionSmoothing: 0.6
+  m_HandFrameDirectionBlend: 0.9
+  m_DirectionSmoothing: 0.8
   m_AutoGripCalibration: 1
   m_GripCalibrationRate: 0.15
   m_EnableMarkerAssist: 1

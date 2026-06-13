@@ -95,7 +95,8 @@ namespace UnityEngine.XR.Templates.MR
         bool m_TrackLeftHand = true;
 
         [SerializeField, Range(0f, 1f)]
-        float m_HandFrameDirectionBlend = 0.72f;
+        [Tooltip("Higher = direction comes mostly from the stable hand frame instead of the noisy per-frame wing angle / thumb position.")]
+        float m_HandFrameDirectionBlend = 0.9f;
 
         [SerializeField, Range(0f, 1f)]
         float m_DirectionSmoothing = 0.8f;
@@ -105,6 +106,19 @@ namespace UnityEngine.XR.Templates.MR
 
         [SerializeField, Range(0f, 1f)]
         float m_GripCalibrationRate = 0.15f;
+
+        [Header("Center lock (snap needle entry to the injection site)")]
+        [SerializeField, Min(0f)]
+        [Tooltip("Within this lateral distance (m) of the site center, the needle entry hard-snaps to the center (visual + metrics). Generous default because hand tracking is noisy.")]
+        float m_CenterLockRadius = 0.03f;
+
+        [SerializeField, Min(0f)]
+        [Tooltip("Hysteresis: once locked, only release past radius + this margin (m), so it does not flicker.")]
+        float m_CenterLockReleaseMargin = 0.015f;
+
+        [SerializeField, Range(0f, 1f)]
+        [Tooltip("How hard to freeze the syringe angle while locked (0 = none, 1 = fully frozen to the angle at lock-on).")]
+        float m_CenterLockAngleDamping = 0.85f;
 
         [Header("Marker calibration")]
         [SerializeField]
@@ -311,6 +325,15 @@ namespace UnityEngine.XR.Templates.MR
         Vector3 m_SmoothedDirection;
         Vector3 m_LocalSyringeAxisInHand;
 
+        // Center-lock state (driven by SetInjectionSnapTarget).
+        bool m_SnapActive;
+        Vector3 m_SnapCenter;
+        Vector3 m_SnapNormal = Vector3.up;
+        float m_SnapRadius = 0.03f;
+        bool m_CenterLockEngaged;
+        bool m_HasLockedDir;
+        Vector3 m_LockedDir = Vector3.forward;
+
         bool m_RightTapArmed;
         float m_RightTapArmedAt;
         float m_LastRightTapTime;
@@ -440,6 +463,11 @@ namespace UnityEngine.XR.Templates.MR
                 SmoothTo(ref m_SmoothedPoints.needleTip, points.needleTip, t);
             }
 
+            // Hard-lock the needle entry to the injection-site center (visual + pose) when close,
+            // and damp the angle while locked. Mutates m_SmoothedPoints so visuals and
+            // TryGetSyringePose both reflect the lock.
+            ApplyCenterLock();
+
             if (m_OverlayVisualsEnabled)
             {
                 UpdateVisuals(m_SmoothedPoints);
@@ -482,6 +510,107 @@ namespace UnityEngine.XR.Templates.MR
             };
 
             return true;
+        }
+
+        /// <summary>
+        /// Sets the injection-site center the rendered needle should hard-lock its entry to when
+        /// close. Called each frame by the tutorial during the angle/insertion/removal steps.
+        /// </summary>
+        public void SetInjectionSnapTarget(Vector3 center, Vector3 surfaceNormal, float lockRadius, bool active)
+        {
+            m_SnapActive = active;
+            m_SnapCenter = center;
+            m_SnapNormal = surfaceNormal.sqrMagnitude > 1e-6f ? surfaceNormal.normalized : Vector3.up;
+            m_SnapRadius = Mathf.Max(0f, lockRadius);
+            if (!active)
+            {
+                m_CenterLockEngaged = false;
+                m_HasLockedDir = false;
+            }
+        }
+
+        /// <summary>
+        /// When the needle entry is within the lock radius of the site center, snaps the whole
+        /// syringe in-plane so the entry sits on the center (kills lateral wobble) and freezes the
+        /// angle by the configured damping. Uses hysteresis so the lock does not flicker.
+        /// </summary>
+        void ApplyCenterLock()
+        {
+            if (!m_SnapActive)
+            {
+                m_CenterLockEngaged = false;
+                m_HasLockedDir = false;
+                return;
+            }
+
+            var plunger = m_SmoothedPoints.plunger;
+            var axis = m_SmoothedPoints.needleTip - plunger;
+            if (axis.sqrMagnitude < 1e-8f)
+                return;
+            axis.Normalize();
+
+            // Where the needle axis crosses the surface plane = the entry point on the skin.
+            var denom = Vector3.Dot(m_SnapNormal, axis);
+            if (Mathf.Abs(denom) < 1e-5f)
+            {
+                m_CenterLockEngaged = false; // needle ~parallel to surface; cannot define an entry
+                return;
+            }
+            var s = Vector3.Dot(m_SnapNormal, m_SnapCenter - m_SmoothedPoints.needleTip) / denom;
+            var entry = m_SmoothedPoints.needleTip + axis * s;
+            var lateralDist = Vector3.ProjectOnPlane(m_SnapCenter - entry, m_SnapNormal).magnitude;
+
+            // Hysteresis: engage within radius, release only past radius + margin.
+            if (!m_CenterLockEngaged)
+                m_CenterLockEngaged = lateralDist <= m_SnapRadius;
+            else if (lateralDist > m_SnapRadius + m_CenterLockReleaseMargin)
+                m_CenterLockEngaged = false;
+
+            if (!m_CenterLockEngaged)
+            {
+                m_HasLockedDir = false;
+                return;
+            }
+
+            // Angle damp: hold the axis steady while locked.
+            if (!m_HasLockedDir)
+            {
+                m_LockedDir = axis;
+                m_HasLockedDir = true;
+            }
+            var dampedAxis = Vector3.Slerp(axis, m_LockedDir, m_CenterLockAngleDamping).normalized;
+            m_LockedDir = dampedAxis; // slowly follows the held direction
+
+            // Re-derive the syringe along the damped axis from the plunger (consistent lengths).
+            var spanToWings = Vector3.Distance(plunger, m_SmoothedPoints.wingsCenter);
+            var halfWing = 0.5f * Vector3.Distance(m_SmoothedPoints.leftWing, m_SmoothedPoints.rightWing);
+            var sideAxis = Vector3.ProjectOnPlane(m_SmoothedPoints.leftWing - m_SmoothedPoints.rightWing, dampedAxis);
+            sideAxis = sideAxis.sqrMagnitude > 1e-8f ? sideAxis.normalized : Vector3.Cross(dampedAxis, m_SnapNormal).normalized;
+            var metal = Mathf.Min(m_MetalNeedleLength, m_BarrelEndToNeedleTip);
+
+            var wingsCenter = plunger + dampedAxis * spanToWings;
+            m_SmoothedPoints.wingsCenter = wingsCenter;
+            m_SmoothedPoints.leftWing = wingsCenter + sideAxis * halfWing;
+            m_SmoothedPoints.rightWing = wingsCenter - sideAxis * halfWing;
+            m_SmoothedPoints.barrelEnd = wingsCenter + dampedAxis * m_WingsToBarrelEnd;
+            m_SmoothedPoints.needleTip = m_SmoothedPoints.barrelEnd + dampedAxis * m_BarrelEndToNeedleTip;
+            m_SmoothedPoints.needleBase = m_SmoothedPoints.needleTip - dampedAxis * metal;
+
+            // Lateral hard-snap: translate everything in-plane so the entry lands on the center.
+            denom = Vector3.Dot(m_SnapNormal, dampedAxis);
+            if (Mathf.Abs(denom) > 1e-5f)
+            {
+                s = Vector3.Dot(m_SnapNormal, m_SnapCenter - m_SmoothedPoints.needleTip) / denom;
+                entry = m_SmoothedPoints.needleTip + dampedAxis * s;
+                var offset = Vector3.ProjectOnPlane(m_SnapCenter - entry, m_SnapNormal);
+                m_SmoothedPoints.plunger += offset;
+                m_SmoothedPoints.wingsCenter += offset;
+                m_SmoothedPoints.leftWing += offset;
+                m_SmoothedPoints.rightWing += offset;
+                m_SmoothedPoints.barrelEnd += offset;
+                m_SmoothedPoints.needleTip += offset;
+                m_SmoothedPoints.needleBase += offset;
+            }
         }
 
         public void StartMarkerCalibration()
