@@ -11,7 +11,8 @@ namespace UnityEngine.XR.Templates.MR
     public class HandOverlaySkeletonToggleBridge : MonoBehaviour
     {
         [SerializeField]
-        bool m_ShowSkeletonByDefault = true;
+        [Tooltip("Default off so the synthetic hand skeleton/mesh does not clutter passthrough; GoalManager drives it via the Skeleton toggle.")]
+        bool m_ShowSkeletonByDefault = false;
 
         [SerializeField]
         [Tooltip("When true, HandVisualizer draws tracked hand meshes (better depth cues and alignment for poke/ray). When false, only joint debug lines.")]

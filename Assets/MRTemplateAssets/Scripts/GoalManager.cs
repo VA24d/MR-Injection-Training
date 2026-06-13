@@ -1610,15 +1610,18 @@ namespace UnityEngine.XR.Templates.MR
                     break;
             }
 
-            // The syringe-overlay toggle is offered wherever the needle is in play (calibration,
-            // type selection, and the fill/injection/removal steps) so the user can show/hide it.
-            Set(m_SyringeOverlayToggleButtonObject,
+            // The syringe-overlay and skeleton toggles are offered wherever the syringe is in play
+            // (calibration, type selection, fill/injection/removal) so the user can show/hide them
+            // on any of those steps — not just calibration.
+            var syringeRelatedStep =
                 step == SyringeCalibrationButtonBridge.TutorialStep.Calibration ||
                 step == SyringeCalibrationButtonBridge.TutorialStep.InjectionType ||
                 step == SyringeCalibrationButtonBridge.TutorialStep.FillSyringe ||
                 step == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle ||
                 step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate ||
-                step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed);
+                step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed;
+            Set(m_SyringeOverlayToggleButtonObject, syringeRelatedStep);
+            Set(m_SkeletonToggleButtonObject, syringeRelatedStep);
         }
 
         /// <summary>
