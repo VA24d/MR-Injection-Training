@@ -299,6 +299,8 @@ namespace UnityEngine.XR.Templates.MR
         string m_LastSyringeOverlayToggleButtonText = string.Empty;
         // User preference: show the cyan syringe overlay (needle). Default on; toggled by the button.
         bool m_SyringeOverlayUserVisible = true;
+        // User preference: show the hand skeleton/mesh. Default off; toggled by the button.
+        bool m_SkeletonUserVisible;
         GameObject m_PreviousStepButtonObject;
         Button m_PreviousStepButton;
         TextMeshProUGUI m_PreviousStepButtonLabel;
@@ -1446,10 +1448,9 @@ namespace UnityEngine.XR.Templates.MR
 
         void OnSkeletonToggleButtonClicked()
         {
-            if (m_HandOverlayBridge == null)
-                return;
-
-            m_HandOverlayBridge.ToggleSkeleton();
+            m_SkeletonUserVisible = !m_SkeletonUserVisible;
+            if (m_HandOverlayBridge != null)
+                m_HandOverlayBridge.SetSkeletonVisible(m_SkeletonUserVisible);
             RefreshActionButtons(force: true);
         }
 
@@ -1463,6 +1464,9 @@ namespace UnityEngine.XR.Templates.MR
 
         void OnPreviousStepButtonClicked()
         {
+            // TEMP DIAGNOSTIC: confirms the tap reaches this handler (vs raycast/occlusion eating it).
+            Debug.Log($"[Coaching] Previous tapped. tutorial={(m_InjectionTutorial != null)} step={(m_InjectionTutorial != null ? m_InjectionTutorial.currentStep.ToString() : "null")}", this);
+
             if (m_InjectionTutorial == null)
                 return;
 
@@ -1921,14 +1925,11 @@ namespace UnityEngine.XR.Templates.MR
 
         void ApplyCalibrationOnlyVisualOverlays(SyringeCalibrationButtonBridge.TutorialStep step)
         {
-            var showCalibrationOverlays = step == SyringeCalibrationButtonBridge.TutorialStep.Calibration;
-
-            // Hand skeleton stays calibration-only (it clutters the injection view).
+            // Both overlays now follow the user's toggle preference across all steps, so a tap to
+            // hide them sticks (the per-step force used to override it every sync).
             if (m_HandOverlayBridge != null)
-                m_HandOverlayBridge.SetSkeletonVisible(showCalibrationOverlays);
+                m_HandOverlayBridge.SetSkeletonVisible(m_SkeletonUserVisible);
 
-            // The cyan syringe overlay follows the user's toggle preference (default on) across all
-            // steps, so the needle is visible during injection unless the user hides it.
             if (m_Tracker != null)
                 m_Tracker.SetOverlayVisualsEnabled(m_SyringeOverlayUserVisible);
         }

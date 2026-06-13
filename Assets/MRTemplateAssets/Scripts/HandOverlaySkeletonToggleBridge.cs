@@ -138,7 +138,8 @@ namespace UnityEngine.XR.Templates.MR
         void ApplyState(bool showSkeleton)
         {
             m_IsSkeletonVisible = showSkeleton;
-            SetVisualizerBool("drawMeshes", m_DrawHandMeshes);
+            // Hide the hand mesh too when the skeleton is hidden, otherwise "hide" leaves the mesh visible.
+            SetVisualizerBool("drawMeshes", showSkeleton && m_DrawHandMeshes);
             SetVisualizerBool("debugDrawJoints", showSkeleton);
 
             if (m_ForceDisableHandRemoval && m_OcclusionManager != null)

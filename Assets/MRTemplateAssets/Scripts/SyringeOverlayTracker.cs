@@ -98,7 +98,7 @@ namespace UnityEngine.XR.Templates.MR
         float m_HandFrameDirectionBlend = 0.72f;
 
         [SerializeField, Range(0f, 1f)]
-        float m_DirectionSmoothing = 0.68f;
+        float m_DirectionSmoothing = 0.8f;
 
         [SerializeField]
         bool m_AutoGripCalibration = true;

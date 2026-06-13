@@ -152,8 +152,8 @@ namespace UnityEngine.XR.Templates.MR
 
         [Header("Angle estimation")]
         [SerializeField]
-        [Tooltip("Source signal for the syringe-vs-surface angle. LongLeverFromSpot is the most occlusion-stable.")]
-        AngleEstimationMode m_AngleEstimationMode = AngleEstimationMode.LongLeverFromSpot;
+        [Tooltip("Source signal for the syringe-vs-surface angle. AxisWithSmoothing uses the syringe's own stabilized axis (correct even when the tip is not yet at the spot).")]
+        AngleEstimationMode m_AngleEstimationMode = AngleEstimationMode.AxisWithSmoothing;
 
         [SerializeField, Range(0f, 1f)]
         [Tooltip("FuseLeverAndAxis: weight of the live needleTip-plunger axis vs the long lever (0 = all lever).")]
@@ -161,7 +161,7 @@ namespace UnityEngine.XR.Templates.MR
 
         [SerializeField, Range(0f, 1f)]
         [Tooltip("AxisWithSmoothing: temporal low-pass factor applied to the measured angle (higher = smoother/laggier).")]
-        float m_AngleSmoothing = 0.85f;
+        float m_AngleSmoothing = 0.9f;
 
         [SerializeField, Min(0.001f)]
         [Tooltip("Needle tip must be within this distance (m) of the surface to lock the snapped contact point on first contact.")]

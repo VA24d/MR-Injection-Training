@@ -57,6 +57,14 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField, Min(0.002f)]
         float m_OrangeDiscRadius = 0.02f;
 
+        [SerializeField, Min(0.001f)]
+        [Tooltip("Radius (m) of the depth channel at the skin; tapers to the tip radius at max depth.")]
+        float m_DepthChannelTopRadius = 0.008f;
+
+        [SerializeField, Min(0.0005f)]
+        [Tooltip("Radius (m) of the depth channel at max depth (needle-tip end).")]
+        float m_DepthChannelTipRadius = 0.0015f;
+
         [Header("Colors")]
         [SerializeField]
         Color m_SpotColor = new Color(1f, 1f, 1f, 0.6f);
@@ -81,20 +89,24 @@ namespace UnityEngine.XR.Templates.MR
         Transform m_Spot;
         Transform m_ConeBand;
         Transform m_OrangePlane;
-        LineRenderer m_GreenLine;
-        LineRenderer m_RedLine;
+        Transform m_GreenChannel;
+        Transform m_RedChannel;
         LineRenderer m_ConeRibs;
 
         Mesh m_DiscMesh;
         Mesh m_ConeBandMesh;
+        Mesh m_GreenChannelMesh;
+        Mesh m_RedChannelMesh;
         Material m_SpotMat;
         Material m_BandMat;
         Material m_GreenMat;
         Material m_RedMat;
         Material m_OrangeMat;
 
-        // Cache so the band mesh is only rebuilt when the angle range changes.
+        // Caches so meshes are only rebuilt when their driving values change.
         Vector2 m_BuiltBandFromNormal = new Vector2(-1f, -1f);
+        float m_BuiltGreenMeters = -1f;
+        float m_BuiltMaxMeters = -1f;
 
         void Awake()
         {
@@ -119,6 +131,8 @@ namespace UnityEngine.XR.Templates.MR
             DestroySafe(m_OrangeMat);
             DestroySafe(m_DiscMesh);
             DestroySafe(m_ConeBandMesh);
+            DestroySafe(m_GreenChannelMesh);
+            DestroySafe(m_RedChannelMesh);
         }
 
         void ResolveReferences()
@@ -135,7 +149,7 @@ namespace UnityEngine.XR.Templates.MR
 
         bool TryBuildGuide()
         {
-            if (m_SurfaceSelectionTool == null || m_Tutorial == null)
+            if (m_Tutorial == null)
                 return false;
 
             // Show whenever a surface is placed, from the Injection Type screen through the injection
@@ -147,12 +161,26 @@ namespace UnityEngine.XR.Templates.MR
                 step == SyringeCalibrationButtonBridge.TutorialStep.FinalScore)
                 return false;
 
-            if (!m_SurfaceSelectionTool.TryGetPlacedSurface(out var surfacePose, out _))
+            Vector3 spot;
+            Vector3 normal;
+            if (m_SurfaceSelectionTool != null && m_SurfaceSelectionTool.TryGetPlacedSurface(out var surfacePose, out _))
+            {
+                spot = surfacePose.position;
+                normal = surfacePose.up;
+                normal = normal.sqrMagnitude < 0.000001f ? Vector3.up : normal.normalized;
+            }
+            else if (step == SyringeCalibrationButtonBridge.TutorialStep.InjectionType && m_MainCamera != null)
+            {
+                // No surface yet on the type screen — float a preview cone in front of the user so
+                // they can watch it resize/recolor as they cycle injection type.
+                var cam = m_MainCamera.transform;
+                spot = cam.position + cam.forward * 0.5f - cam.up * 0.1f;
+                normal = Vector3.up;
+            }
+            else
+            {
                 return false;
-
-            var spot = surfacePose.position;
-            var normal = surfacePose.up;
-            normal = normal.sqrMagnitude < 0.000001f ? Vector3.up : normal.normalized;
+            }
 
             // Declared + defaulted before the short-circuit so it is definitely assigned even when
             // m_Tracker is null (TryGetSyringePose is then never called).
@@ -184,19 +212,77 @@ namespace UnityEngine.XR.Templates.MR
             var inRange = angle >= range.x && angle <= range.y;
             SetBandColor(inRange ? m_BandInRangeColor : m_BandColor);
 
-            // Depth zones run along the ideal needle path (nominal type angle, live azimuth).
+            // Depth zones: a tapering channel below the skin along the ideal needle path. Green =
+            // correct depth (skin -> accurate), red = too deep (accurate -> max), orange disk = max.
             var ideal = ComputeIdealInjectionAxis(normal, syringeForward);
             var greenMeters = m_Tutorial.currentInjectionGreenDepthCm * 0.01f;
-            var maxMeters = m_Tutorial.currentInjectionMaxDepthCm * 0.01f;
-            var greenEnd = spot + ideal * greenMeters;
-            var maxEnd = spot + ideal * maxMeters;
+            var maxMeters = Mathf.Max(greenMeters + 0.001f, m_Tutorial.currentInjectionMaxDepthCm * 0.01f);
+            EnsureDepthMeshes(greenMeters, maxMeters);
 
-            SetLine(m_GreenLine, spot, greenEnd, m_GreenColor);
-            SetLine(m_RedLine, greenEnd, maxEnd, m_RedColor);
-            PlaceDisc(m_OrangePlane, maxEnd, ideal, m_OrangeDiscRadius);
+            var depthRotation = Quaternion.FromToRotation(Vector3.up, ideal);
+            m_GreenChannel.SetPositionAndRotation(spot, depthRotation);
+            m_RedChannel.SetPositionAndRotation(spot, depthRotation);
+            PlaceDisc(m_OrangePlane, spot + ideal * maxMeters, ideal, DepthRadiusAt(maxMeters, maxMeters) + 0.003f);
 
             SetVisible(true);
             return true;
+        }
+
+        // Channel radius tapers from the skin (wide) down to the needle tip (narrow) at max depth.
+        float DepthRadiusAt(float depthMeters, float maxMeters)
+        {
+            var t = maxMeters > 0.0001f ? Mathf.Clamp01(depthMeters / maxMeters) : 0f;
+            return Mathf.Lerp(m_DepthChannelTopRadius, m_DepthChannelTipRadius, t);
+        }
+
+        void EnsureDepthMeshes(float greenMeters, float maxMeters)
+        {
+            if (Mathf.Approximately(greenMeters, m_BuiltGreenMeters) &&
+                Mathf.Approximately(maxMeters, m_BuiltMaxMeters))
+                return;
+
+            // Local +Y runs inward along the ideal axis; y = depth below the skin.
+            BuildFrustumMesh(m_GreenChannelMesh,
+                0f, DepthRadiusAt(0f, maxMeters),
+                greenMeters, DepthRadiusAt(greenMeters, maxMeters));
+            BuildFrustumMesh(m_RedChannelMesh,
+                greenMeters, DepthRadiusAt(greenMeters, maxMeters),
+                maxMeters, DepthRadiusAt(maxMeters, maxMeters));
+
+            m_BuiltGreenMeters = greenMeters;
+            m_BuiltMaxMeters = maxMeters;
+        }
+
+        // Double-sided conical frustum lateral surface between (yTop,rTop) and (yBottom,rBottom) along +Y.
+        void BuildFrustumMesh(Mesh mesh, float yTop, float rTop, float yBottom, float rBottom)
+        {
+            mesh.Clear();
+            var seg = Mathf.Max(8, m_ConeSegments);
+            var verts = new Vector3[(seg + 1) * 2];
+            var tris = new int[seg * 12];
+
+            for (var i = 0; i <= seg; i++)
+            {
+                var az = (i / (float)seg) * Mathf.PI * 2f;
+                var c = Mathf.Cos(az);
+                var s = Mathf.Sin(az);
+                verts[i * 2] = new Vector3(c * rTop, yTop, s * rTop);
+                verts[i * 2 + 1] = new Vector3(c * rBottom, yBottom, s * rBottom);
+            }
+
+            var t = 0;
+            for (var i = 0; i < seg; i++)
+            {
+                int a = i * 2, b = i * 2 + 1, cc = (i + 1) * 2, d = (i + 1) * 2 + 1;
+                tris[t++] = a; tris[t++] = cc; tris[t++] = b;
+                tris[t++] = b; tris[t++] = cc; tris[t++] = d;
+                tris[t++] = b; tris[t++] = cc; tris[t++] = a;
+                tris[t++] = d; tris[t++] = cc; tris[t++] = b;
+            }
+
+            mesh.vertices = verts;
+            mesh.triangles = tris;
+            mesh.RecalculateBounds();
         }
 
         /// <summary>
@@ -319,17 +405,6 @@ namespace UnityEngine.XR.Templates.MR
             }
         }
 
-        void SetLine(LineRenderer line, Vector3 a, Vector3 b, Color color)
-        {
-            line.positionCount = 2;
-            line.SetPosition(0, a);
-            line.SetPosition(1, b);
-            line.startWidth = m_DepthLineWidth;
-            line.endWidth = m_DepthLineWidth;
-            line.startColor = color;
-            line.endColor = color;
-        }
-
         void SetVisible(bool visible)
         {
             if (m_Root != null && m_Root.gameObject.activeSelf != visible)
@@ -345,7 +420,9 @@ namespace UnityEngine.XR.Templates.MR
             m_Root.SetParent(transform, false);
 
             m_DiscMesh = BuildDiscMesh(48);
-            m_ConeBandMesh = new Mesh { name = "GuideConeBand" }; // built on demand in EnsureConeBandMesh
+            m_ConeBandMesh = new Mesh { name = "GuideConeBand" };     // built on demand in EnsureConeBandMesh
+            m_GreenChannelMesh = new Mesh { name = "GuideDepthGreen" }; // built on demand in EnsureDepthMeshes
+            m_RedChannelMesh = new Mesh { name = "GuideDepthRed" };
 
             m_SpotMat = CreateColoredMaterial(m_SpotColor);
             m_BandMat = CreateColoredMaterial(m_BandColor);
@@ -355,10 +432,10 @@ namespace UnityEngine.XR.Templates.MR
 
             m_Spot = CreateMeshObject("Injection Spot", m_DiscMesh, m_SpotMat);
             m_ConeBand = CreateMeshObject("Angle Band", m_ConeBandMesh, m_BandMat);
+            m_GreenChannel = CreateMeshObject("Correct Depth", m_GreenChannelMesh, m_GreenMat);
+            m_RedChannel = CreateMeshObject("Over Depth", m_RedChannelMesh, m_RedMat);
             m_OrangePlane = CreateMeshObject("Max Depth Plane", m_DiscMesh, m_OrangeMat);
 
-            m_GreenLine = CreateLine("Correct Depth", m_GreenMat, m_Root, worldSpace: true);
-            m_RedLine = CreateLine("Over Depth", m_RedMat, m_Root, worldSpace: true);
             // Ribs live in the band's local space (apex at spot, +Y = surface normal).
             m_ConeRibs = CreateLine("Angle Band Ribs", m_BandMat, m_ConeBand, worldSpace: false);
             m_ConeRibs.startWidth = m_DepthLineWidth * 0.4f;
