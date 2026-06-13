@@ -108,6 +108,12 @@ namespace UnityEngine.XR.Templates.MR
         float m_BuiltGreenMeters = -1f;
         float m_BuiltMaxMeters = -1f;
 
+        // Type-screen preview: anchored ONCE in front of the user (world-fixed), so it does not
+        // follow the head/hand or pulse. Cleared when a surface is placed or the step changes.
+        bool m_PreviewActive;
+        Vector3 m_PreviewSpot;
+        Vector3 m_PreviewHeading = Vector3.forward;
+
         void Awake()
         {
             CreateVisuals();
@@ -163,22 +169,34 @@ namespace UnityEngine.XR.Templates.MR
 
             Vector3 spot;
             Vector3 normal;
+            bool previewMode;
             if (m_SurfaceSelectionTool != null && m_SurfaceSelectionTool.TryGetPlacedSurface(out var surfacePose, out _))
             {
                 spot = surfacePose.position;
                 normal = surfacePose.up;
                 normal = normal.sqrMagnitude < 0.000001f ? Vector3.up : normal.normalized;
+                previewMode = false;
+                m_PreviewActive = false;
             }
             else if (step == SyringeCalibrationButtonBridge.TutorialStep.InjectionType && m_MainCamera != null)
             {
-                // No surface yet on the type screen — float a preview cone in front of the user so
-                // they can watch it resize/recolor as they cycle injection type.
-                var cam = m_MainCamera.transform;
-                spot = cam.position + cam.forward * 0.5f - cam.up * 0.1f;
+                // No surface yet on the type screen — show a preview cone. Anchor it ONCE in front of
+                // the user and leave it world-fixed, so it does not follow the head/hand or pulse.
+                if (!m_PreviewActive)
+                {
+                    var cam = m_MainCamera.transform;
+                    m_PreviewSpot = cam.position + cam.forward * 0.5f - cam.up * 0.1f;
+                    var heading = Vector3.ProjectOnPlane(cam.forward, Vector3.up);
+                    m_PreviewHeading = heading.sqrMagnitude > 0.000001f ? heading.normalized : Vector3.forward;
+                    m_PreviewActive = true;
+                }
+                spot = m_PreviewSpot;
                 normal = Vector3.up;
+                previewMode = true;
             }
             else
             {
+                m_PreviewActive = false;
                 return false;
             }
 
@@ -188,13 +206,22 @@ namespace UnityEngine.XR.Templates.MR
             var hasPose = m_Tracker != null && m_Tracker.TryGetSyringePose(out syringe);
             var syringeForward = hasPose ? syringe.forward : Vector3.zero;
 
-            // Spot disc shrinks as the needle nears the surface.
-            var needleDistance = hasPose
-                ? Mathf.Abs(Vector3.Dot(syringe.needleTip - spot, normal))
-                : m_SpotShrinkRangeMeters;
-            var diameter = Mathf.Lerp(m_SpotMinDiameter, m_SpotMaxDiameter,
-                Mathf.Clamp01(needleDistance / Mathf.Max(0.001f, m_SpotShrinkRangeMeters)));
-            diameter = Mathf.Max(diameter, m_SpotMinDiameter);
+            // Spot disc shrinks as the needle nears the surface — but stays fixed in preview (no
+            // real surface, so the hand-to-spot distance is meaningless and would make it pulse).
+            float diameter;
+            if (previewMode)
+            {
+                diameter = m_SpotMaxDiameter;
+            }
+            else
+            {
+                var needleDistance = hasPose
+                    ? Mathf.Abs(Vector3.Dot(syringe.needleTip - spot, normal))
+                    : m_SpotShrinkRangeMeters;
+                diameter = Mathf.Lerp(m_SpotMinDiameter, m_SpotMaxDiameter,
+                    Mathf.Clamp01(needleDistance / Mathf.Max(0.001f, m_SpotShrinkRangeMeters)));
+                diameter = Mathf.Max(diameter, m_SpotMinDiameter);
+            }
             PlaceDisc(m_Spot, spot + normal * 0.001f, normal, diameter * 0.5f);
 
             // Blue band: a slant ribbon between the steep (inner) and shallow (outer) valid angles,
@@ -214,7 +241,10 @@ namespace UnityEngine.XR.Templates.MR
 
             // Depth zones: a tapering channel below the skin along the ideal needle path. Green =
             // correct depth (skin -> accurate), red = too deep (accurate -> max), orange disk = max.
-            var ideal = ComputeIdealInjectionAxis(normal, syringeForward);
+            // In preview, drive the depth azimuth from the fixed anchored heading (not the live hand),
+            // so the channel does not swing around with hand movement.
+            var headingForward = previewMode ? m_PreviewHeading : syringeForward;
+            var ideal = ComputeIdealInjectionAxis(normal, headingForward);
             var greenMeters = m_Tutorial.currentInjectionGreenDepthCm * 0.01f;
             var maxMeters = Mathf.Max(greenMeters + 0.001f, m_Tutorial.currentInjectionMaxDepthCm * 0.01f);
             EnsureDepthMeshes(greenMeters, maxMeters);
@@ -518,8 +548,14 @@ namespace UnityEngine.XR.Templates.MR
                          Shader.Find("Standard");
 
             var material = new Material(shader);
+            // Configure URP Unlit as transparent. The keyword + blend MUST be set together or the
+            // surface renders opaque/garbage ("broken material") on URP builds.
             if (material.HasProperty("_Surface"))
-                material.SetFloat("_Surface", 1f);
+                material.SetFloat("_Surface", 1f); // 0 = opaque, 1 = transparent
+            if (material.HasProperty("_Blend"))
+                material.SetFloat("_Blend", 0f);    // alpha blend
+            material.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            material.SetOverrideTag("RenderType", "Transparent");
             if (material.HasProperty("_BaseColor"))
                 material.SetColor("_BaseColor", color);
             if (material.HasProperty("_Color"))
