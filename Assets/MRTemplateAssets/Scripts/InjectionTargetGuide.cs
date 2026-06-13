@@ -54,9 +54,6 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField, Min(0.0005f)]
         float m_DepthLineWidth = 0.004f;
 
-        [SerializeField, Min(0.002f)]
-        float m_OrangeDiscRadius = 0.02f;
-
         [SerializeField, Min(0.001f)]
         [Tooltip("Radius (m) of the depth channel at the skin; tapers to the tip radius at max depth.")]
         float m_DepthChannelTopRadius = 0.008f;
@@ -545,7 +542,14 @@ namespace UnityEngine.XR.Templates.MR
             var shader = Shader.Find("Universal Render Pipeline/Unlit") ??
                          Shader.Find("Sprites/Default") ??
                          Shader.Find("Unlit/Color") ??
-                         Shader.Find("Standard");
+                         Shader.Find("Standard") ??
+                         Shader.Find("Hidden/Internal-Colored"); // always present, last resort
+
+            if (shader == null)
+            {
+                Debug.LogWarning("[InjectionTargetGuide] No usable shader found for guide material.");
+                return null; // never pass null to new Material(); renderer will show default, not crash
+            }
 
             var material = new Material(shader);
             // Configure URP Unlit as transparent. The keyword + blend MUST be set together or the

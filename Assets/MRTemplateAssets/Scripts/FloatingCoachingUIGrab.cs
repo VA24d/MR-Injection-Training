@@ -76,10 +76,6 @@ namespace UnityEngine.XR.Templates.MR
         [Tooltip("Color for the visible drag bar.")]
         Color m_HandleVisualColor = new(0.1254902f, 0.5882353f, 0.9529412f, 1f);
 
-        [SerializeField]
-        [Min(8f)]
-        [Tooltip("Maximum visual height for the blue drag bar in canvas local units.")]
-        float m_HandleVisualMaxHeight = 32f;
 
         XRGrabInteractable m_Grab;
         Rigidbody m_Rigidbody;
