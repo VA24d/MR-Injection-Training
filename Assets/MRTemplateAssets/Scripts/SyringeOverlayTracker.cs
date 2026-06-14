@@ -11,6 +11,7 @@ namespace UnityEngine.XR.Templates.MR
     /// Tracks a syringe-like overlay from left-hand joints and exposes key syringe points.
     /// Includes marker-assisted calibration/tracking to stabilize direction under motion.
     /// </summary>
+    [DefaultExecutionOrder(-50)]
     public class SyringeOverlayTracker : MonoBehaviour
     {
         struct SyringePoints
@@ -119,6 +120,31 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField, Range(0f, 1f)]
         [Tooltip("How hard to freeze the syringe angle while locked (0 = none, 1 = fully frozen to the angle at lock-on).")]
         float m_CenterLockAngleDamping = 0.85f;
+
+        [Header("Thumb-to-center proximity draw")]
+        [SerializeField]
+        [Tooltip("When the hand is near the injection site, draw the syringe as a fixed-length line from thumb toward the site center instead of noisy knuckle geometry.")]
+        bool m_UseThumbToCenterProximityDraw = true;
+
+        [SerializeField, Min(0.03f)]
+        [Tooltip("Thumb within this distance (m) of the site center uses thumb-to-center drawing.")]
+        float m_ProximityDrawDistance = 0.12f;
+
+        [SerializeField, Min(0.01f)]
+        [Tooltip("Thumb within this distance (m) of the surface plane also engages thumb-to-center drawing.")]
+        float m_ProximityPlaneDistance = 0.08f;
+
+        [SerializeField, Min(0.01f)]
+        [Tooltip("Looser plane distance (m) for approach visuals (angle overlay) before full thumb lock.")]
+        float m_ProximityApproachPlaneDistance = 0.12f;
+
+        [SerializeField, Min(0f)]
+        [Tooltip("Extra lateral slack (m) added to snap radius for approach visuals.")]
+        float m_ProximityApproachLateralMargin = 0.03f;
+
+        [SerializeField, Min(0.01f)]
+        [Tooltip("Fixed plunger-to-wings span (m) used in thumb-to-center mode.")]
+        float m_FixedPlungerToWings = 0.032f;
 
         [Header("Marker calibration")]
         [SerializeField]
@@ -272,6 +298,13 @@ namespace UnityEngine.XR.Templates.MR
         public Vector3 needleBasePoint => m_SmoothedPoints.needleBase;
         public Vector3 needleTipPoint => m_NeedleTipPoint;
         public Vector3 syringeDirection => (m_NeedleTipPoint - m_PlungerPoint).normalized;
+        public bool isThumbToCenterMode => m_ThumbToCenterActive;
+        public bool isNearInjectionSite => m_IsNearInjectionSite;
+        public Vector3 thumbToCenterAxis => m_ThumbToCenterAxis;
+        public Vector3 injectionSiteCenter => m_SnapCenter;
+        public Vector3 rawThumbTip => m_RawThumbTip;
+        /// <summary>Thumb closing toward knuckles from raw hand joints (cm/s), independent of rebuilt syringe geometry.</summary>
+        public float rawThumbTowardKnucklesRateCmPerSec => m_RawThumbTowardKnucklesRateCmPerSec;
 
         public bool isCalibratingMarker => m_IsCalibratingMarker;
         public bool isMarkerCalibrated => m_IsMarkerCalibrated;
@@ -336,6 +369,16 @@ namespace UnityEngine.XR.Templates.MR
         bool m_CenterLockEngaged;
         bool m_HasLockedDir;
         Vector3 m_LockedDir = Vector3.forward;
+        bool m_ThumbToCenterActive;
+        Vector3 m_ThumbToCenterAxis = Vector3.forward;
+        Vector3 m_RawThumbTip;
+        Vector3 m_RawWingsCenter;
+        Vector3 m_PreviousRawThumbTip;
+        bool m_HasPreviousRawThumbTip;
+        float m_RawThumbTowardKnucklesRateCmPerSec;
+        bool m_IsNearInjectionSite;
+        Vector3 m_SmoothedThumb;
+        bool m_HasSmoothedThumb;
 
         bool m_RightTapArmed;
         float m_RightTapArmedAt;
@@ -432,6 +475,9 @@ namespace UnityEngine.XR.Templates.MR
                 m_HasSmoothedPose = false;
                 m_HasSmoothedDirection = false;
                 m_HasPreviousRightTip = false;
+                m_HasPreviousRawThumbTip = false;
+                m_RawThumbTowardKnucklesRateCmPerSec = 0f;
+                m_IsNearInjectionSite = false;
                 ClearMarkerDebugVisuals();
                 return;
             }
@@ -444,6 +490,9 @@ namespace UnityEngine.XR.Templates.MR
                 m_HasSmoothedPose = false;
                 m_HasSmoothedDirection = false;
                 m_HasPreviousRightTip = false;
+                m_HasPreviousRawThumbTip = false;
+                m_RawThumbTowardKnucklesRateCmPerSec = 0f;
+                m_IsNearInjectionSite = false;
                 ClearMarkerDebugVisuals();
                 return;
             }
@@ -472,10 +521,10 @@ namespace UnityEngine.XR.Templates.MR
                 SmoothTo(ref m_SmoothedPoints.needleTip, points.needleTip, t);
             }
 
-            // Hard-lock the needle entry to the injection-site center (visual + pose) when close,
-            // and damp the angle while locked. Mutates m_SmoothedPoints so visuals and
-            // TryGetSyringePose both reflect the lock.
-            ApplyCenterLock();
+            UpdateRawThumbMetrics(points);
+
+            // Near the site: thumb-to-center fixed-length syringe; otherwise legacy center-lock.
+            ApplyThumbToCenterProximityDraw();
 
             if (m_OverlayVisualsEnabled)
             {
@@ -536,16 +585,156 @@ namespace UnityEngine.XR.Templates.MR
             {
                 m_CenterLockEngaged = false;
                 m_HasLockedDir = false;
+                m_ThumbToCenterActive = false;
+                m_HasSmoothedThumb = false;
             }
         }
 
+        void UpdateRawThumbMetrics(SyringePoints naturalPoints)
+        {
+            m_RawWingsCenter = naturalPoints.wingsCenter;
+            var dt = Mathf.Max(Time.deltaTime, 0.0001f);
+            if (m_HasPreviousRawThumbTip)
+            {
+                var thumbVelocity = (m_RawThumbTip - m_PreviousRawThumbTip) / dt;
+                var towardKnuckles = m_RawWingsCenter - m_RawThumbTip;
+                if (towardKnuckles.sqrMagnitude > 1e-6f)
+                {
+                    m_RawThumbTowardKnucklesRateCmPerSec =
+                        Vector3.Dot(thumbVelocity, towardKnuckles.normalized) * 100f;
+                }
+                else
+                {
+                    m_RawThumbTowardKnucklesRateCmPerSec = 0f;
+                }
+            }
+
+            m_PreviousRawThumbTip = m_RawThumbTip;
+            m_HasPreviousRawThumbTip = true;
+
+            if (!m_SnapActive)
+            {
+                m_IsNearInjectionSite = false;
+                return;
+            }
+
+            var plane = new Plane(m_SnapNormal, m_SnapCenter);
+            var thumbPlaneDist = Mathf.Abs(plane.GetDistanceToPoint(m_RawThumbTip));
+            var lateralDist = Vector3.ProjectOnPlane(m_RawThumbTip - m_SnapCenter, m_SnapNormal).magnitude;
+            m_IsNearInjectionSite = thumbPlaneDist <= m_ProximityApproachPlaneDistance &&
+                                    lateralDist <= m_SnapRadius + m_ProximityApproachLateralMargin;
+        }
+
         /// <summary>
-        /// When the needle entry is within the lock radius of the site center, snaps the whole
-        /// syringe in-plane so the entry sits on the center (kills lateral wobble) and freezes the
-        /// angle by the configured damping. Uses hysteresis so the lock does not flicker.
+        /// When the thumb is near the injection site, rebuild the syringe along a fixed-length
+        /// thumb-to-center axis so visuals and metrics are not driven by noisy knuckle geometry.
+        /// Falls back to <see cref="ApplyCenterLock"/> when farther away.
+        /// </summary>
+        void ApplyThumbToCenterProximityDraw()
+        {
+            m_ThumbToCenterActive = false;
+
+            if (!m_SnapActive)
+            {
+                m_CenterLockEngaged = false;
+                m_HasLockedDir = false;
+                m_HasSmoothedThumb = false;
+                return;
+            }
+
+            if (!m_UseThumbToCenterProximityDraw)
+            {
+                ApplyCenterLock();
+                return;
+            }
+
+            var thumb = m_RawThumbTip;
+            var plane = new Plane(m_SnapNormal, m_SnapCenter);
+            var thumbPlaneDist = Mathf.Abs(plane.GetDistanceToPoint(thumb));
+            var lateralDist = Vector3.ProjectOnPlane(thumb - m_SnapCenter, m_SnapNormal).magnitude;
+
+            var engage = thumbPlaneDist <= m_ProximityPlaneDistance &&
+                         lateralDist <= m_SnapRadius;
+
+            if (!engage)
+            {
+                m_HasSmoothedThumb = false;
+                ApplyCenterLock();
+                return;
+            }
+
+            if (!m_HasSmoothedThumb)
+            {
+                m_SmoothedThumb = thumb;
+                m_HasSmoothedThumb = true;
+            }
+            else
+            {
+                var thumbT = 1f - Mathf.Pow(1f - Mathf.Clamp01(m_PositionSmoothing * 0.5f), Time.deltaTime * 90f);
+                m_SmoothedThumb = Vector3.Lerp(m_SmoothedThumb, thumb, thumbT);
+            }
+
+            var plunger = m_SmoothedThumb;
+            var toCenter = m_SnapCenter - plunger;
+            if (toCenter.sqrMagnitude < 1e-8f)
+                return;
+
+            var axis = toCenter.normalized;
+            m_ThumbToCenterActive = true;
+            m_ThumbToCenterAxis = axis;
+            m_CenterLockEngaged = true;
+            m_LockedDir = axis;
+            m_HasLockedDir = true;
+
+            var plungerToWings = m_FixedPlungerToWings;
+            var wingsCenter = plunger + axis * plungerToWings;
+            var sideAxis = Vector3.Cross(axis, m_SnapNormal);
+            if (sideAxis.sqrMagnitude < 1e-8f)
+                sideAxis = Vector3.Cross(axis, Vector3.up);
+            sideAxis.Normalize();
+            var halfWing = 0.008f;
+
+            var rebuilt = new SyringePoints
+            {
+                plunger = plunger,
+                wingsCenter = wingsCenter,
+                leftWing = wingsCenter + sideAxis * halfWing,
+                rightWing = wingsCenter - sideAxis * halfWing,
+                barrelEnd = plunger + axis * (plungerToWings + m_WingsToBarrelEnd),
+                needleTip = plunger + axis * (plungerToWings + m_WingsToBarrelEnd + m_BarrelEndToNeedleTip),
+            };
+            var metal = Mathf.Min(m_MetalNeedleLength, m_BarrelEndToNeedleTip);
+            rebuilt.needleBase = rebuilt.needleTip - axis * metal;
+
+            SnapSyringeEntryToSiteCenter(ref rebuilt, axis);
+            m_SmoothedPoints = rebuilt;
+        }
+
+        void SnapSyringeEntryToSiteCenter(ref SyringePoints points, Vector3 axis)
+        {
+            var denom = Vector3.Dot(m_SnapNormal, axis);
+            if (Mathf.Abs(denom) < 1e-5f)
+                return;
+
+            var s = Vector3.Dot(m_SnapNormal, m_SnapCenter - points.needleTip) / denom;
+            var entry = points.needleTip + axis * s;
+            var offset = Vector3.ProjectOnPlane(m_SnapCenter - entry, m_SnapNormal);
+            points.plunger += offset;
+            points.wingsCenter += offset;
+            points.leftWing += offset;
+            points.rightWing += offset;
+            points.barrelEnd += offset;
+            points.needleTip += offset;
+            points.needleBase += offset;
+        }
+
+        /// <summary>
+        /// Legacy center-lock: lateral snap + angle damping on knuckle-derived geometry.
         /// </summary>
         void ApplyCenterLock()
         {
+            m_ThumbToCenterActive = false;
+
             if (!m_SnapActive)
             {
                 m_CenterLockEngaged = false;
@@ -792,9 +981,11 @@ namespace UnityEngine.XR.Templates.MR
             }
 
             var plunger = 0.5f * (thumbTip.position + thumbIp.position);
+            m_RawThumbTip = thumbTip.position;
             var indexWingRaw = BlendFingerSupport(indexTip.position, indexDip.position, indexPip.position);
             var middleWingRaw = BlendFingerSupport(middleTip.position, middleDip.position, middlePip.position);
-            var wingsCenterRaw = 0.5f * (indexWingRaw + middleWingRaw);
+            m_RawWingsCenter = 0.5f * (indexWingRaw + middleWingRaw);
+            var wingsCenterRaw = m_RawWingsCenter;
 
             var axisVector = wingsCenterRaw - plunger;
             if (axisVector.sqrMagnitude < 0.0000001f)

@@ -21,6 +21,7 @@ namespace UnityEngine.XR.Templates.MR
     /// <summary>
     /// Disables the MR template wrist menu and runs a stubbed injection tutorial flow.
     /// </summary>
+    [DefaultExecutionOrder(50)]
     public class SyringeCalibrationButtonBridge : MonoBehaviour
     {
         public enum TutorialStep
@@ -36,7 +37,23 @@ namespace UnityEngine.XR.Templates.MR
             FinalScore = 8,
             /// <summary>Appended at end to preserve serialized enum values for prior steps.</summary>
             CleanSurfaceAlcohol = 9,
+            /// <summary>Thumb-to-center insertion at the site (after clean surface + Next).</summary>
+            Insertion = 10,
+            /// <summary>Thumb-closing flow / dispense rate.</summary>
+            FlowRate = 11,
         }
+
+        public static bool IsSiteSnapStep(TutorialStep step) =>
+            step == TutorialStep.InjectionAngle ||
+            step == TutorialStep.Insertion ||
+            step == TutorialStep.FlowRate ||
+            step == TutorialStep.RemoveSpeed ||
+            step == TutorialStep.InsertionSpeedFlowRate;
+
+        public static bool IsInsertionPipelineStep(TutorialStep step) =>
+            step == TutorialStep.Insertion ||
+            step == TutorialStep.FlowRate ||
+            step == TutorialStep.RemoveSpeed;
 
         public enum InjectionType
         {
@@ -132,23 +149,23 @@ namespace UnityEngine.XR.Templates.MR
         [Header("Per-type insertion depth (cm) — x = green/accurate, y = orange/max")]
         [SerializeField]
         [Tooltip("Intradermal correct (x) and max (y) needle depth in cm. Clamped to needle length 4.7 cm.")]
-        Vector2 m_IntradermalDepthCm = new Vector2(0.2f, 0.4f);
+        Vector2 m_IntradermalDepthCm = new Vector2(0.12f, 0.25f);
 
         [SerializeField]
         [Tooltip("Subcutaneous correct (x) and max (y) needle depth in cm.")]
-        Vector2 m_SubcutaneousDepthCm = new Vector2(0.8f, 1.2f);
+        Vector2 m_SubcutaneousDepthCm = new Vector2(0.35f, 0.6f);
 
         [SerializeField]
         [Tooltip("Intramuscular correct (x) and max (y) needle depth in cm.")]
-        Vector2 m_IntramuscularDepthCm = new Vector2(2.5f, 3.8f);
+        Vector2 m_IntramuscularDepthCm = new Vector2(0.7f, 1.1f);
 
         [SerializeField]
         [Tooltip("Intravenous correct (x) and max (y) needle depth in cm.")]
-        Vector2 m_IntravenousDepthCm = new Vector2(1.0f, 1.5f);
+        Vector2 m_IntravenousDepthCm = new Vector2(0.45f, 0.75f);
 
         [SerializeField]
         [Tooltip("Fallback correct (x) and max (y) needle depth in cm when no type is selected.")]
-        Vector2 m_DefaultDepthCm = new Vector2(0.8f, 1.2f);
+        Vector2 m_DefaultDepthCm = new Vector2(0.35f, 0.6f);
 
         [Header("Angle estimation")]
         [SerializeField]
@@ -169,7 +186,7 @@ namespace UnityEngine.XR.Templates.MR
 
         [SerializeField, Min(0f)]
         [Tooltip("Lateral radius (m) within which the rendered needle entry hard-locks to the site center. Passed to the tracker each frame.")]
-        float m_CenterLockRadius = 0.03f;
+        float m_CenterLockRadius = 0.05f;
 
         [SerializeField]
         [Tooltip("Absolute lock mode: the needle entry is ALWAYS pinned to the site center (zero lateral offset, no radius). Only insertion distance varies; angle is still measured from the hand. Toggled live from the coaching UI.")]
@@ -197,6 +214,10 @@ namespace UnityEngine.XR.Templates.MR
         float m_InsertedStabilityHoldSeconds = 0.45f;
 
         [SerializeField, Min(0.1f)]
+        [Tooltip("During insertion, hold hand steady with needle inserted for this long to advance to flow (even if target depth not reached).")]
+        float m_InsertionStabilityHoldSeconds = 2f;
+
+        [SerializeField, Min(0.1f)]
         float m_TargetDispensePlungerRateCmPerSec = 1.6f;
 
         [SerializeField, Min(0.01f)]
@@ -208,11 +229,57 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField, Min(0.01f)]
         float m_DispenseStopPlungerRateCmPerSec = 0.08f;
 
-        [SerializeField, Min(0f)]
-        float m_DispenseStopHoldSeconds = 0.2f;
+        [SerializeField, Min(0.05f)]
+        [Tooltip("Thumb closing toward knuckles must be sustained this long before leaving the insertion step.")]
+        float m_ThumbDispenseSustainSeconds = 0.28f;
+
+        [SerializeField, Min(0.05f)]
+        [Tooltip("Minimum insertion depth (cm) at the site before dispensing can start the flow step.")]
+        float m_MinDepthBeforeDispenseCm = 0.08f;
+
+        [SerializeField, Min(1f)]
+        [Tooltip("Thumb must be within this plane distance (cm) from the site before depth tracking starts.")]
+        float m_MaxThumbPlaneDistForDepthBaselineCm = 3.5f;
 
         [SerializeField, Min(0.1f)]
-        float m_DispenseAutoAdvanceSeconds = 4f;
+        [Tooltip("Minimum time spent actively dispensing before stopping can advance to removal.")]
+        float m_MinDispenseActiveSeconds = 0.35f;
+
+        [SerializeField, Min(0.05f)]
+        [Tooltip("Stopped administering must be held this long before advancing to removal.")]
+        float m_DispenseStopHoldSeconds = 0.2f;
+
+        [SerializeField, Min(0.01f)]
+        [Tooltip("Thumb closing toward knuckles (cm/s) to start the flow/dispense sub-phase.")]
+        float m_ThumbTowardKnucklesStartCmPerSec = 0.05f;
+
+        [SerializeField, Min(0.01f)]
+        [Tooltip("Thumb closing rate below this (cm/s) counts as stopped administering.")]
+        float m_ThumbTowardKnucklesStopCmPerSec = 0.05f;
+
+        [SerializeField, Min(0.1f)]
+        [Tooltip("After insertion depth is met, hold at the site this long before auto-advancing to flow.")]
+        float m_InsertionAtDepthHoldSeconds = 0.6f;
+
+        [SerializeField, Min(0.05f)]
+        [Tooltip("Sustained thumb movement while inserted also advances to flow.")]
+        float m_InsertionThumbActivitySeconds = 0.15f;
+
+        [SerializeField, Min(0.1f)]
+        [Tooltip("After correct insertion depth is reached, hold at depth with hand tracking for this long to auto-advance to removal.")]
+        float m_PostInjectionHoldSeconds = 5f;
+
+        [SerializeField, Min(0.02f)]
+        [Tooltip("Depth decrease (cm) from peak after insertion to count as starting withdrawal.")]
+        float m_WithdrawalDepthDeltaCm = 0.06f;
+
+        [SerializeField, Min(0.1f)]
+        [Tooltip("Axial needle speed outward (cm/s) along the ideal axis to count as withdrawal.")]
+        float m_MinWithdrawalAxialSpeedCmPerSec = 0.35f;
+
+        [SerializeField, Min(0.1f)]
+        [Tooltip("Horizontal syringe/hand speed away from the injection-site center (cm/s) to count as withdrawal.")]
+        float m_MinHandAwayFromCenterCmPerSec = 1.2f;
 
         [SerializeField, Min(0.1f)]
         float m_TargetRemovalSpeedCmPerSec = 4.5f;
@@ -235,10 +302,6 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField, Min(0f)]
         [Tooltip("Depth threshold in cm considered fully removed from the surface during removal step.")]
         float m_RemovalCompleteDepthCm = 0.02f;
-
-        [SerializeField, Min(0f)]
-        [Tooltip("After this many seconds on the syringe removal card, auto-advance to the score screen (if not already advanced).")]
-        float m_RemovalStepAutoAdvanceSeconds = 5f;
 
         [Header("Runtime state")]
         [SerializeField]
@@ -290,9 +353,6 @@ namespace UnityEngine.XR.Templates.MR
         float m_StepElapsedSeconds;
 
         [SerializeField]
-        bool m_IsDispensePhase;
-
-        [SerializeField]
         float m_CurrentInsertionDepthCm;
 
         [SerializeField]
@@ -303,6 +363,9 @@ namespace UnityEngine.XR.Templates.MR
 
         [SerializeField]
         float m_CurrentPlungerPushRateCmPerSec;
+
+        [SerializeField]
+        float m_ThumbTowardKnucklesRateCmPerSec;
 
         [SerializeField]
         float m_PlungerTravelNormalized;
@@ -330,6 +393,18 @@ namespace UnityEngine.XR.Templates.MR
         float m_InsertionStableHoldProgress;
         float m_InitialPlungerToWingsDistanceCm;
         bool m_HasInitialPlungerDistance;
+        float m_InsertionDepthBaselineThumbPlaneCm;
+        bool m_HasInsertionDepthBaseline;
+        bool m_HasLatchedNearSiteEngagement;
+        float m_ThumbDispenseSustainProgress;
+        float m_InsertionThumbActivityProgress;
+        float m_InsertionAtDepthHoldProgress;
+        float m_PostInjectionDepthHoldProgress;
+        float m_PeakInsertionDepthCm;
+        float m_HandDistanceFromCenterCm;
+        float m_PreviousHandDistanceFromCenterCm;
+        float m_CurrentAxialNeedleSpeedCmPerSec;
+        bool m_HasPreviousHandDistance;
 
         // Snapped injection geometry (needle assumed to enter at the target-spot center).
         Vector3 m_InjectionContactPoint;
@@ -363,8 +438,11 @@ namespace UnityEngine.XR.Templates.MR
         /// <summary>Smoothed lateral speed used for stability gate and scoring.</summary>
         public float removalLateralSmoothedCmPerSec => m_RemovalLateralSmoothedCmPerSec;
         public float maxRemovalLateralSpeedCmPerSec => m_MaxRemovalLateralSpeedCmPerSec;
-        /// <summary>When false, the coaching Next button is disabled. On the removal step, manual advance to the score screen is always allowed.</summary>
-        public bool removalCheckpointMet => true;
+        /// <summary>When false, the coaching Next button is disabled on the removal step.</summary>
+        public bool removalCheckpointMet =>
+            m_CurrentStep != TutorialStep.RemoveSpeed ||
+            m_RemovalHoldProgress >= m_SpeedHoldSeconds ||
+            m_IsFinished;
         public bool bubbleCheckCompleted => m_BubbleCheckCompleted;
         public bool surfaceCleanCompleted => m_SurfaceCleanCompleted;
 
@@ -373,6 +451,9 @@ namespace UnityEngine.XR.Templates.MR
 
         public float insertionFlowHoldProgressNormalized =>
             m_SpeedHoldSeconds > 0.01f ? Mathf.Clamp01(m_InsertionHoldProgress / m_SpeedHoldSeconds) : 0f;
+
+        public float insertionStabilityHoldProgressNormalized =>
+            m_InsertionStabilityHoldSeconds > 0.01f ? Mathf.Clamp01(m_InsertionStableHoldProgress / m_InsertionStabilityHoldSeconds) : 0f;
 
         public float removalHoldProgressNormalized =>
             m_SpeedHoldSeconds > 0.01f ? Mathf.Clamp01(m_RemovalHoldProgress / m_SpeedHoldSeconds) : 0f;
@@ -388,12 +469,15 @@ namespace UnityEngine.XR.Templates.MR
         public float targetFlowRateMlPerSec => m_TargetFlowRateMlPerSec;
         public float targetRemovalSpeedCmPerSec => m_TargetRemovalSpeedCmPerSec;
         public float targetFillAmountNormalized => m_TargetFillAmount;
+        public float insertionStabilityHoldSeconds => m_InsertionStabilityHoldSeconds;
 
-        public bool isDispensePhase => m_IsDispensePhase;
+        public bool isDispensePhase => m_CurrentStep == TutorialStep.FlowRate;
+        public bool hasLatchedNearSiteEngagement => m_HasLatchedNearSiteEngagement;
         public float currentInsertionDepthCm => m_CurrentInsertionDepthCm;
         public float effectiveInsertionDepthTargetCm => m_EffectiveInsertionDepthTargetCm;
         public float currentLateralStabilityCmPerSec => m_CurrentLateralStabilityCmPerSec;
         public float currentPlungerPushRateCmPerSec => m_CurrentPlungerPushRateCmPerSec;
+        public float thumbTowardKnucklesRateCmPerSec => m_ThumbTowardKnucklesRateCmPerSec;
         public float plungerTravelNormalized => m_PlungerTravelNormalized;
         public float angleGuidanceErrorDegrees => m_AngleGuidanceErrorDegrees;
         public float angleHoldSecondsRemaining => Mathf.Max(0f, m_AngleHoldSeconds - m_AngleHoldProgress);
@@ -464,6 +548,12 @@ namespace UnityEngine.XR.Templates.MR
 #if UNITY_EDITOR
             HandleEditorDebugInput();
 #endif
+        }
+
+        void LateUpdate()
+        {
+            if (!m_IsTutorialRunning || m_IsFinished)
+                return;
 
             TickStep();
         }
@@ -488,11 +578,11 @@ namespace UnityEngine.XR.Templates.MR
             m_RemovalLateralSmoothedCmPerSec = 0f;
             m_HasPreviousNeedleTip = false;
             m_LastScoreBreakdown = default;
-            m_IsDispensePhase = false;
             m_CurrentInsertionDepthCm = 0f;
             m_EffectiveInsertionDepthTargetCm = m_MinInsertionDepthCm;
             m_CurrentLateralStabilityCmPerSec = 0f;
             m_CurrentPlungerPushRateCmPerSec = 0f;
+            m_ThumbTowardKnucklesRateCmPerSec = 0f;
             m_PlungerTravelNormalized = 0f;
             m_HasCompletedInsertionDepth = false;
             m_HasStartedDispensePress = false;
@@ -502,6 +592,16 @@ namespace UnityEngine.XR.Templates.MR
             m_InsertionStableHoldProgress = 0f;
             m_HasInitialPlungerDistance = false;
             m_DispenseElapsedSeconds = 0f;
+            m_PostInjectionDepthHoldProgress = 0f;
+            m_PeakInsertionDepthCm = 0f;
+            m_HandDistanceFromCenterCm = 0f;
+            m_PreviousHandDistanceFromCenterCm = 0f;
+            m_CurrentAxialNeedleSpeedCmPerSec = 0f;
+            m_HasPreviousHandDistance = false;
+            m_HasInsertionDepthBaseline = false;
+            m_InsertionDepthBaselineThumbPlaneCm = 0f;
+            m_HasLatchedNearSiteEngagement = false;
+            m_ThumbDispenseSustainProgress = 0f;
             m_HasContactPoint = false;
             m_HasLockedContactPoint = false;
             m_HasSmoothedAngle = false;
@@ -569,16 +669,22 @@ namespace UnityEngine.XR.Templates.MR
                     GoToStep(TutorialStep.CleanSurfaceAlcohol);
                     break;
                 case TutorialStep.CleanSurfaceAlcohol:
-                    GoToStep(TutorialStep.InjectionAngle);
+                    GoToStep(TutorialStep.Insertion);
                     break;
                 case TutorialStep.InjectionAngle:
-                    GoToStep(TutorialStep.InsertionSpeedFlowRate);
+                    GoToStep(TutorialStep.Insertion);
                     break;
+                case TutorialStep.Insertion:
+                    m_HasLatchedNearSiteEngagement = true;
+                    m_HasCompletedInsertionDepth = true;
+                    GoToStep(TutorialStep.FlowRate);
+                    break;
+                case TutorialStep.FlowRate:
                 case TutorialStep.InsertionSpeedFlowRate:
-                    GoToStep(TutorialStep.RemoveSpeed);
-                    break;
                 case TutorialStep.RemoveSpeed:
-                    GoToStep(TutorialStep.FinalScore);
+                    // Flow/removal auto-advance from hand motion only.
+                    break;
+                case TutorialStep.FinalScore:
                     break;
             }
         }
@@ -608,17 +714,23 @@ namespace UnityEngine.XR.Templates.MR
                 case TutorialStep.BubbleCheckManual:
                     GoToStep(TutorialStep.FillSyringe);
                     break;
+                case TutorialStep.CleanSurfaceAlcohol:
+                    GoToStep(TutorialStep.BubbleCheckManual);
+                    break;
                 case TutorialStep.InjectionAngle:
                     GoToStep(TutorialStep.CleanSurfaceAlcohol);
                     break;
-                case TutorialStep.CleanSurfaceAlcohol:
-                    GoToStep(TutorialStep.BubbleCheckManual);
+                case TutorialStep.Insertion:
+                    GoToStep(TutorialStep.CleanSurfaceAlcohol);
+                    break;
+                case TutorialStep.FlowRate:
+                    GoToStep(TutorialStep.Insertion);
                     break;
                 case TutorialStep.InsertionSpeedFlowRate:
                     GoToStep(TutorialStep.InjectionAngle);
                     break;
                 case TutorialStep.RemoveSpeed:
-                    GoToStep(TutorialStep.InsertionSpeedFlowRate);
+                    GoToStep(TutorialStep.FlowRate);
                     break;
                 case TutorialStep.FinalScore:
                     GoToStep(TutorialStep.RemoveSpeed);
@@ -690,8 +802,14 @@ namespace UnityEngine.XR.Templates.MR
                 case TutorialStep.InjectionAngle:
                     TickInjectionAngleStep();
                     break;
+                case TutorialStep.Insertion:
+                    TickInsertionStep();
+                    break;
+                case TutorialStep.FlowRate:
+                    TickFlowRateStep();
+                    break;
                 case TutorialStep.InsertionSpeedFlowRate:
-                    TickInsertionAndFlowStep();
+                    TickInsertionStep();
                     break;
                 case TutorialStep.RemoveSpeed:
                     TickRemovalSpeedStep();
@@ -758,9 +876,6 @@ namespace UnityEngine.XR.Templates.MR
         {
             if (!m_SurfaceCleanCompleted && m_AutoAdvanceStub && m_StepElapsedSeconds >= m_CleanSurfaceManualFallbackDelay)
                 m_SurfaceCleanCompleted = true;
-
-            if (m_SurfaceCleanCompleted)
-                GoToStep(TutorialStep.InjectionAngle);
         }
 
         void TickInjectionAngleStep()
@@ -790,127 +905,152 @@ namespace UnityEngine.XR.Templates.MR
                 m_AngleHoldProgress = 0f;
 
             if (m_AngleHoldProgress >= m_AngleHoldSeconds)
-                GoToStep(TutorialStep.InsertionSpeedFlowRate);
+                GoToStep(TutorialStep.Insertion);
         }
 
-        void TickInsertionAndFlowStep()
+        void TickInsertionStep()
         {
             var hasTracking = TryUpdatePoseMetrics();
-            if (!hasTracking && m_AutoAdvanceStub)
+
+            if (!IsThumbEngagedAtSite())
             {
-                if (!m_HasCompletedInsertionDepth)
-                {
-                    m_InsertionSpeedCmPerSec = Mathf.Lerp(m_InsertionSpeedCmPerSec, m_TargetInsertionSpeedCmPerSec, 3f * Time.deltaTime);
-                    m_CurrentInsertionDepthCm = Mathf.Lerp(m_CurrentInsertionDepthCm, m_EffectiveInsertionDepthTargetCm + 0.1f, 2.5f * Time.deltaTime);
-                    m_CurrentLateralStabilityCmPerSec = Mathf.Lerp(m_CurrentLateralStabilityCmPerSec, 0.6f, 2.5f * Time.deltaTime);
-                    m_InsertionStableHoldProgress += Time.deltaTime;
-                    if (m_InsertionStableHoldProgress >= m_InsertedStabilityHoldSeconds)
-                        m_HasCompletedInsertionDepth = true;
-                }
-                else
-                {
-                    m_IsDispensePhase = true;
-                    m_CurrentPlungerPushRateCmPerSec = Mathf.Lerp(m_CurrentPlungerPushRateCmPerSec, m_TargetDispensePlungerRateCmPerSec, 3f * Time.deltaTime);
-                    m_FlowRateMlPerSec = Mathf.Lerp(m_FlowRateMlPerSec, m_TargetFlowRateMlPerSec, 3f * Time.deltaTime);
-                    m_PlungerTravelNormalized = Mathf.Clamp01(m_PlungerTravelNormalized + Time.deltaTime * 0.4f);
-                }
+                m_ThumbDispenseSustainProgress = 0f;
+                m_InsertionThumbActivityProgress = 0f;
+                m_InsertionAtDepthHoldProgress = 0f;
+                return;
             }
 
-            if (!m_HasCompletedInsertionDepth)
+            if (!hasTracking)
+                return;
+
+            var inserted = m_CurrentInsertionDepthCm >= m_MinDepthBeforeDispenseCm ||
+                           m_PeakInsertionDepthCm >= m_MinDepthBeforeDispenseCm;
+            var thumbClosing = m_ThumbTowardKnucklesRateCmPerSec >= m_ThumbTowardKnucklesStartCmPerSec;
+            var thumbActive = Mathf.Abs(m_ThumbTowardKnucklesRateCmPerSec) >= m_ThumbTowardKnucklesStartCmPerSec * 0.45f;
+
+            if (thumbClosing && inserted)
+                m_ThumbDispenseSustainProgress += Time.deltaTime;
+            else
+                m_ThumbDispenseSustainProgress = 0f;
+
+            if (inserted && thumbActive)
+                m_InsertionThumbActivityProgress += Time.deltaTime;
+            else
+                m_InsertionThumbActivityProgress = 0f;
+
+            if (inserted && !thumbActive)
+                m_InsertionAtDepthHoldProgress += Time.deltaTime;
+            else
+                m_InsertionAtDepthHoldProgress = 0f;
+
+            var readyForFlow =
+                m_ThumbDispenseSustainProgress >= m_ThumbDispenseSustainSeconds ||
+                (inserted && m_InsertionThumbActivityProgress >= m_InsertionThumbActivitySeconds) ||
+                (inserted && m_InsertionAtDepthHoldProgress >= m_InsertionAtDepthHoldSeconds);
+
+            if (readyForFlow)
             {
-                var insertedEnough = m_CurrentInsertionDepthCm >= m_EffectiveInsertionDepthTargetCm;
-                var stableEnough = m_CurrentLateralStabilityCmPerSec <= m_MaxLateralStabilityCmPerSec;
-                var movingForwardEnough = m_InsertionSpeedCmPerSec >= 0.15f;
-
-                if (insertedEnough && stableEnough && movingForwardEnough)
-                    m_InsertionStableHoldProgress += Time.deltaTime;
-                else
-                    m_InsertionStableHoldProgress = 0f;
-
-                m_InsertionHoldProgress = Mathf.Clamp01(m_InsertionStableHoldProgress / Mathf.Max(0.01f, m_InsertedStabilityHoldSeconds)) * m_SpeedHoldSeconds;
-
-                if (m_InsertionStableHoldProgress >= m_InsertedStabilityHoldSeconds)
-                {
-                    m_HasCompletedInsertionDepth = true;
-                    m_InsertionHoldProgress = 0f;
-                }
-            }
-
-            if (!m_IsDispensePhase)
-            {
-                // One-way latch: once insertion depth is completed, plunger motion starts flow mode and never reverts.
-                if (m_HasCompletedInsertionDepth && m_CurrentPlungerPushRateCmPerSec >= m_DispenseStartPlungerRateCmPerSec)
-                    m_IsDispensePhase = true;
-            }
-
-            if (m_IsDispensePhase)
-            {
-                if (m_HasStartedDispensePress)
-                    m_DispenseElapsedSeconds += Time.deltaTime;
-
-                if (m_DispenseElapsedSeconds >= m_DispenseAutoAdvanceSeconds)
-                {
-                    GoToStep(TutorialStep.RemoveSpeed);
-                    return;
-                }
-
-                if (m_CurrentPlungerPushRateCmPerSec >= m_DispenseStartPlungerRateCmPerSec)
-                    m_HasStartedDispensePress = true;
-
-                var flowOk = Mathf.Abs(m_FlowRateMlPerSec - m_TargetFlowRateMlPerSec) <= 0.22f;
-                var plungerRateOk = Mathf.Abs(m_CurrentPlungerPushRateCmPerSec - m_TargetDispensePlungerRateCmPerSec) <= 0.8f;
-                var stableEnough = m_CurrentLateralStabilityCmPerSec <= m_MaxLateralStabilityCmPerSec;
-
-                if (flowOk && plungerRateOk && stableEnough)
-                    m_InsertionHoldProgress += Time.deltaTime;
-                else
-                    m_InsertionHoldProgress = Mathf.Max(0f, m_InsertionHoldProgress - Time.deltaTime * 0.8f);
-
-                // User-requested behavior: once dispensing started, stopping plunger press advances to the next card.
-                if (m_HasStartedDispensePress)
-                {
-                    if (m_CurrentPlungerPushRateCmPerSec <= m_DispenseStopPlungerRateCmPerSec)
-                        m_DispenseStopProgress += Time.deltaTime;
-                    else
-                        m_DispenseStopProgress = 0f;
-
-                    if (m_DispenseStopProgress >= m_DispenseStopHoldSeconds)
-                    {
-                        GoToStep(TutorialStep.RemoveSpeed);
-                        return;
-                    }
-                }
-
-                var plungerComplete = m_PlungerTravelNormalized >= 0.98f;
-                if (plungerComplete)
-                    GoToStep(TutorialStep.RemoveSpeed);
+                m_HasCompletedInsertionDepth = inserted;
+                m_HasLatchedNearSiteEngagement = inserted;
+                GoToStep(TutorialStep.FlowRate);
             }
         }
 
-        void TickRemovalSpeedStep()
+        void TickFlowRateStep()
         {
-            if (m_StepElapsedSeconds >= m_RemovalStepAutoAdvanceSeconds)
+            if (!HasMeaningfulInsertionAtSite())
+                return;
+
+            var hasTracking = TryUpdatePoseMetrics();
+            var atSite = m_Tracker != null &&
+                         (m_Tracker.isThumbToCenterMode || m_Tracker.isNearInjectionSite);
+            if (!hasTracking || !atSite)
+                return;
+
+            if (m_ThumbTowardKnucklesRateCmPerSec >= m_ThumbTowardKnucklesStartCmPerSec)
+                m_HasStartedDispensePress = true;
+
+            if (!m_HasStartedDispensePress)
+                return;
+
+            m_DispenseElapsedSeconds += Time.deltaTime;
+
+            if (m_ThumbTowardKnucklesRateCmPerSec <= m_ThumbTowardKnucklesStopCmPerSec)
+                m_DispenseStopProgress += Time.deltaTime;
+            else
+                m_DispenseStopProgress = 0f;
+
+            if (m_DispenseElapsedSeconds >= m_MinDispenseActiveSeconds &&
+                m_DispenseStopProgress >= m_DispenseStopHoldSeconds)
+                GoToStep(TutorialStep.RemoveSpeed);
+        }
+
+        bool IsThumbEngagedAtSite() => m_Tracker != null && m_Tracker.isThumbToCenterMode;
+
+        bool HasMeaningfulInsertionAtSite() =>
+            m_HasLatchedNearSiteEngagement && m_PeakInsertionDepthCm >= m_MinDepthBeforeDispenseCm;
+
+        /// <summary>
+        /// On the removal card: auto-advance when withdrawing or after holding steady at the site.
+        /// </summary>
+        void TickPostInjectionAutoAdvance(bool hasTracking)
+        {
+            if (!HasMeaningfulInsertionAtSite())
+                return;
+
+            m_PeakInsertionDepthCm = Mathf.Max(m_PeakInsertionDepthCm, m_CurrentInsertionDepthCm);
+
+            var depthWithdrawing = m_PeakInsertionDepthCm - m_CurrentInsertionDepthCm >= m_WithdrawalDepthDeltaCm;
+            var axialWithdrawing = m_CurrentAxialNeedleSpeedCmPerSec <= -m_MinWithdrawalAxialSpeedCmPerSec;
+
+            var handAwaySpeed = 0f;
+            if (m_HasPreviousHandDistance)
+                handAwaySpeed = (m_HandDistanceFromCenterCm - m_PreviousHandDistanceFromCenterCm) / Mathf.Max(Time.deltaTime, 0.0001f);
+            var handMovingAway = handAwaySpeed >= m_MinHandAwayFromCenterCmPerSec;
+
+            if (depthWithdrawing || axialWithdrawing || handMovingAway)
             {
                 GoToStep(TutorialStep.FinalScore);
                 return;
             }
 
-            var hasTracking = TryUpdatePoseMetrics();
-            if (!hasTracking && m_AutoAdvanceStub)
+            if (!hasTracking || !m_Tracker.isThumbToCenterMode)
             {
-                m_RemovalSpeedCmPerSec = Mathf.Lerp(m_RemovalSpeedCmPerSec, m_TargetRemovalSpeedCmPerSec, 3f * Time.deltaTime);
-                m_RemovalLateralSmoothedCmPerSec = Mathf.Lerp(m_RemovalLateralSmoothedCmPerSec, 0f, 5f * Time.deltaTime);
-            }
-            else if (hasTracking)
-            {
-                var t = Mathf.Clamp01(m_RemovalLateralSmoothing * Time.deltaTime);
-                m_RemovalLateralSmoothedCmPerSec = Mathf.Lerp(m_RemovalLateralSmoothedCmPerSec, m_RemovalLateralSpeedCmPerSec, t);
+                m_PostInjectionDepthHoldProgress = 0f;
+                return;
             }
 
-            if (m_CurrentInsertionDepthCm > m_RemovalCompleteDepthCm)
+            var stableEnough = m_CurrentLateralStabilityCmPerSec <= m_MaxLateralStabilityCmPerSec;
+            if (stableEnough)
+                m_PostInjectionDepthHoldProgress += Time.deltaTime;
+            else
+                m_PostInjectionDepthHoldProgress = 0f;
+
+            if (m_PostInjectionDepthHoldProgress >= m_PostInjectionHoldSeconds)
+                GoToStep(TutorialStep.FinalScore);
+        }
+
+        void TickRemovalSpeedStep()
+        {
+            if (!HasMeaningfulInsertionAtSite())
+                return;
+
+            var hasTracking = TryUpdatePoseMetrics();
+            if (!hasTracking)
+                return;
+
+            var t = Mathf.Clamp01(m_RemovalLateralSmoothing * Time.deltaTime);
+            m_RemovalLateralSmoothedCmPerSec = Mathf.Lerp(m_RemovalLateralSmoothedCmPerSec, m_RemovalLateralSpeedCmPerSec, t);
+
+            m_PeakInsertionDepthCm = Mathf.Max(m_PeakInsertionDepthCm, m_CurrentInsertionDepthCm);
+
+            if (m_PeakInsertionDepthCm >= m_MinDepthBeforeDispenseCm &&
+                m_CurrentInsertionDepthCm > m_RemovalCompleteDepthCm)
                 m_HasBeenInsertedDuringRemoval = true;
 
-            if (m_HasBeenInsertedDuringRemoval && m_CurrentInsertionDepthCm <= m_RemovalCompleteDepthCm)
+            if (m_HasBeenInsertedDuringRemoval &&
+                m_PeakInsertionDepthCm >= m_MinDepthBeforeDispenseCm &&
+                m_CurrentInsertionDepthCm <= m_RemovalCompleteDepthCm)
             {
                 GoToStep(TutorialStep.FinalScore);
                 return;
@@ -925,6 +1065,8 @@ namespace UnityEngine.XR.Templates.MR
 
             if (m_RemovalHoldProgress >= m_SpeedHoldSeconds)
                 GoToStep(TutorialStep.FinalScore);
+
+            TickPostInjectionAutoAdvance(hasTracking);
         }
 
         bool TryUpdatePoseMetrics()
@@ -951,11 +1093,11 @@ namespace UnityEngine.XR.Templates.MR
                 // point there pins one end of the syringe to a stable, known location so depth and
                 // angle ride a long lever instead of the jittery, occlusion-prone needle tip.
                 var spot = surfacePose.position;
-                var snapStep = m_CurrentStep == TutorialStep.InjectionAngle ||
-                               m_CurrentStep == TutorialStep.InsertionSpeedFlowRate ||
-                               m_CurrentStep == TutorialStep.RemoveSpeed;
-                var lockStep = m_CurrentStep == TutorialStep.InsertionSpeedFlowRate ||
-                               m_CurrentStep == TutorialStep.RemoveSpeed;
+                var snapStep = IsSiteSnapStep(m_CurrentStep);
+                var lockStep = m_CurrentStep == TutorialStep.Insertion ||
+                               m_CurrentStep == TutorialStep.FlowRate ||
+                               m_CurrentStep == TutorialStep.RemoveSpeed ||
+                               m_CurrentStep == TutorialStep.InsertionSpeedFlowRate;
                 var tipPlaneDistance = Mathf.Abs(plane.GetDistanceToPoint(pose.needleTip));
 
                 // Once the needle first reaches the spot during insertion/removal, lock the entry so
@@ -973,19 +1115,62 @@ namespace UnityEngine.XR.Templates.MR
                 // their entry to the site center while near it.
                 m_Tracker.SetInjectionSnapTarget(spot, normal, m_CenterLockRadius, snapStep, m_AbsoluteCenterLock);
 
-                // Ideal needle path below the skin: nominal type angle, azimuth from the live syringe
-                // heading so the depth guide sits under where the user actually approaches.
-                m_IdealInjectionAxis = ComputeIdealInjectionAxis(normal, pose.forward);
+                var useThumbAxis = m_Tracker != null && m_Tracker.isThumbToCenterMode;
+                var nearSite = m_Tracker != null &&
+                               (m_Tracker.isThumbToCenterMode || m_Tracker.isNearInjectionSite);
+                var approachAxis = useThumbAxis
+                    ? m_Tracker.thumbToCenterAxis
+                    : nearSite && lockStep
+                        ? (spot - m_Tracker.rawThumbTip).normalized
+                        : pose.forward;
 
-                // Angle (0 = parallel to surface, 90 = perpendicular) per the selected estimation mode.
-                m_InjectionAngleDegrees = ComputeInjectionAngleDegrees(pose, normal, m_InjectionContactPoint);
+                // Ideal needle path: thumb-to-center axis when proximity-locked, otherwise live heading.
+                m_IdealInjectionAxis = useThumbAxis || (nearSite && lockStep)
+                    ? approachAxis
+                    : ComputeIdealInjectionAxis(normal, pose.forward);
+
+                m_InjectionAngleDegrees = useThumbAxis || (nearSite && lockStep)
+                    ? AngleFromSurface(approachAxis, normal)
+                    : ComputeInjectionAngleDegrees(pose, normal, m_InjectionContactPoint);
 
                 // Depth = inserted length along the ideal axis, measured from the snapped entry,
                 // capped at the per-type max (which is itself capped at needle length).
                 var depthCapCm = currentInjectionMaxDepthCm;
-                var depthAlongCm = Vector3.Dot(pose.needleTip - m_InjectionContactPoint, m_IdealInjectionAxis) * 100f;
-                m_CurrentInsertionDepthCm = Mathf.Clamp(depthAlongCm, 0f, depthCapCm);
+                var thumbPlaneDistCm = Mathf.Abs(plane.GetDistanceToPoint(pose.plunger)) * 100f;
+
+                if (useThumbAxis && m_CurrentStep == TutorialStep.Insertion)
+                {
+                    if (!m_HasInsertionDepthBaseline &&
+                        thumbPlaneDistCm <= m_MaxThumbPlaneDistForDepthBaselineCm)
+                    {
+                        m_InsertionDepthBaselineThumbPlaneCm = thumbPlaneDistCm;
+                        m_HasInsertionDepthBaseline = true;
+                    }
+
+                    if (m_HasInsertionDepthBaseline)
+                    {
+                        var thumbApproachCm = Mathf.Max(0f, m_InsertionDepthBaselineThumbPlaneCm - thumbPlaneDistCm);
+                        m_CurrentInsertionDepthCm = Mathf.Clamp(thumbApproachCm, 0f, depthCapCm);
+                    }
+                    else
+                    {
+                        var depthAlongCm = Vector3.Dot(pose.needleTip - m_InjectionContactPoint, m_IdealInjectionAxis) * 100f;
+                        m_CurrentInsertionDepthCm = Mathf.Clamp(depthAlongCm, 0f, depthCapCm);
+                    }
+                }
+                else
+                {
+                    var depthAlongCm = Vector3.Dot(pose.needleTip - m_InjectionContactPoint, m_IdealInjectionAxis) * 100f;
+                    m_CurrentInsertionDepthCm = Mathf.Clamp(depthAlongCm, 0f, depthCapCm);
+                }
+
                 m_EffectiveInsertionDepthTargetCm = Mathf.Min(currentInjectionGreenDepthCm, depthCapCm);
+
+                if (IsInsertionPipelineStep(m_CurrentStep) && !useThumbAxis)
+                    m_CurrentInsertionDepthCm = 0f;
+
+                if (useThumbAxis)
+                    m_PeakInsertionDepthCm = Mathf.Max(m_PeakInsertionDepthCm, m_CurrentInsertionDepthCm);
 
                 if (m_HasPreviousNeedleTip)
                 {
@@ -996,9 +1181,17 @@ namespace UnityEngine.XR.Templates.MR
                     var axialCmPerSec = Vector3.Dot(needleVelocity, inwardAxis) * 100f;
                     var lateralCmPerSec = Vector3.ProjectOnPlane(needleVelocity, inwardAxis).magnitude * 100f;
 
+                    m_CurrentAxialNeedleSpeedCmPerSec = axialCmPerSec;
                     m_InsertionSpeedCmPerSec = Mathf.Max(0f, axialCmPerSec);
                     m_CurrentLateralStabilityCmPerSec = lateralCmPerSec;
                 }
+
+                var handOnPlane = Vector3.ProjectOnPlane(pose.wingsCenter - spot, normal);
+                m_PreviousHandDistanceFromCenterCm = m_HasPreviousHandDistance
+                    ? m_HandDistanceFromCenterCm
+                    : handOnPlane.magnitude * 100f;
+                m_HandDistanceFromCenterCm = handOnPlane.magnitude * 100f;
+                m_HasPreviousHandDistance = true;
             }
             else
             {
@@ -1006,6 +1199,8 @@ namespace UnityEngine.XR.Templates.MR
                 m_CurrentInsertionDepthCm = 0f;
                 m_EffectiveInsertionDepthTargetCm = m_MinInsertionDepthCm;
                 m_CurrentLateralStabilityCmPerSec = 0f;
+                m_CurrentAxialNeedleSpeedCmPerSec = 0f;
+                m_HasPreviousHandDistance = false;
                 m_HasContactPoint = false;
                 m_Tracker.SetInjectionSnapTarget(Vector3.zero, Vector3.up, 0f, false);
             }
@@ -1015,7 +1210,9 @@ namespace UnityEngine.XR.Templates.MR
                 var needleVelocity = (pose.needleTip - m_PreviousNeedleTip) / dt;
                 var forwardSpeedCmPerSec = Vector3.Dot(needleVelocity, pose.forward) * 100f;
 
-                if (m_CurrentStep == TutorialStep.InsertionSpeedFlowRate)
+                if (m_CurrentStep == TutorialStep.Insertion ||
+                    m_CurrentStep == TutorialStep.FlowRate ||
+                    m_CurrentStep == TutorialStep.InsertionSpeedFlowRate)
                 {
                     if (!hasSurface)
                         m_InsertionSpeedCmPerSec = Mathf.Max(0f, forwardSpeedCmPerSec);
@@ -1030,23 +1227,31 @@ namespace UnityEngine.XR.Templates.MR
             }
 
             var plungerToWingsCm = Vector3.Distance(pose.plunger, pose.wingsCenter) * 100f;
-            if (!m_HasInitialPlungerDistance && m_CurrentStep == TutorialStep.InsertionSpeedFlowRate)
+            if (!m_HasInitialPlungerDistance &&
+                (m_CurrentStep == TutorialStep.FlowRate || m_CurrentStep == TutorialStep.InsertionSpeedFlowRate))
             {
                 m_InitialPlungerToWingsDistanceCm = plungerToWingsCm;
                 m_HasInitialPlungerDistance = true;
             }
 
-            if (m_HasPreviousNeedleTip)
+            var thumbMetricsActive = IsInsertionPipelineStep(m_CurrentStep) &&
+                (IsThumbEngagedAtSite() || (m_Tracker != null && m_Tracker.isNearInjectionSite));
+            if (thumbMetricsActive && m_Tracker != null)
             {
-                var plungerVelocity = (pose.plunger - m_PlungerWorldPrev) / dt;
-                m_CurrentPlungerPushRateCmPerSec = Mathf.Max(0f, Vector3.Dot(plungerVelocity, pose.forward) * 100f);
+                m_ThumbTowardKnucklesRateCmPerSec = m_Tracker.rawThumbTowardKnucklesRateCmPerSec;
+                m_CurrentPlungerPushRateCmPerSec = Mathf.Max(0f, m_ThumbTowardKnucklesRateCmPerSec);
+            }
+            else if (IsInsertionPipelineStep(m_CurrentStep))
+            {
+                m_ThumbTowardKnucklesRateCmPerSec = 0f;
+                m_CurrentPlungerPushRateCmPerSec = 0f;
             }
 
             if (m_HasInitialPlungerDistance)
             {
                 var travelCm = Mathf.Max(0f, m_InitialPlungerToWingsDistanceCm - plungerToWingsCm);
                 m_PlungerTravelNormalized = Mathf.Clamp01(travelCm / Mathf.Max(0.01f, m_MinPlungerTravelToCompleteCm));
-                m_FlowRateMlPerSec = Mathf.Clamp(m_CurrentPlungerPushRateCmPerSec * 0.38f, 0f, 2.5f);
+                m_FlowRateMlPerSec = Mathf.Clamp(m_ThumbTowardKnucklesRateCmPerSec * 0.38f, 0f, 2.5f);
             }
 
             m_PreviousNeedleTip = pose.needleTip;
@@ -1111,9 +1316,7 @@ namespace UnityEngine.XR.Templates.MR
 
             // Release the tracker center-lock outside the angle/insertion/removal steps so the needle
             // is not snapped to a site on unrelated steps.
-            var snapStep = nextStep == TutorialStep.InjectionAngle ||
-                           nextStep == TutorialStep.InsertionSpeedFlowRate ||
-                           nextStep == TutorialStep.RemoveSpeed;
+            var snapStep = IsSiteSnapStep(nextStep);
             if (m_Tracker != null && !snapStep)
                 m_Tracker.SetInjectionSnapTarget(Vector3.zero, Vector3.up, 0f, false);
 
@@ -1130,11 +1333,10 @@ namespace UnityEngine.XR.Templates.MR
             if (nextStep == TutorialStep.InjectionAngle)
                 m_AngleHoldProgress = 0f;
 
-            if (nextStep == TutorialStep.InsertionSpeedFlowRate)
+            if (nextStep == TutorialStep.Insertion)
             {
                 m_InsertionHoldProgress = 0f;
                 m_InsertionStableHoldProgress = 0f;
-                m_IsDispensePhase = false;
                 m_HasCompletedInsertionDepth = false;
                 m_HasStartedDispensePress = false;
                 m_DispenseStopProgress = 0f;
@@ -1143,10 +1345,60 @@ namespace UnityEngine.XR.Templates.MR
                 m_EffectiveInsertionDepthTargetCm = m_MinInsertionDepthCm;
                 m_CurrentLateralStabilityCmPerSec = 0f;
                 m_CurrentPlungerPushRateCmPerSec = 0f;
+                m_ThumbTowardKnucklesRateCmPerSec = 0f;
                 m_PlungerTravelNormalized = 0f;
                 m_HasInitialPlungerDistance = false;
                 m_HasPreviousNeedleTip = false;
-                // Re-arm the contact snap so it locks afresh on this insertion (removal keeps the lock).
+                m_PostInjectionDepthHoldProgress = 0f;
+                m_PeakInsertionDepthCm = 0f;
+                m_HandDistanceFromCenterCm = 0f;
+                m_PreviousHandDistanceFromCenterCm = 0f;
+                m_CurrentAxialNeedleSpeedCmPerSec = 0f;
+                m_HasPreviousHandDistance = false;
+                m_HasInsertionDepthBaseline = false;
+                m_InsertionDepthBaselineThumbPlaneCm = 0f;
+                m_HasLatchedNearSiteEngagement = false;
+                m_ThumbDispenseSustainProgress = 0f;
+                m_InsertionThumbActivityProgress = 0f;
+                m_InsertionAtDepthHoldProgress = 0f;
+                m_PeakInsertionDepthCm = 0f;
+                m_HasLockedContactPoint = false;
+            }
+
+            if (nextStep == TutorialStep.FlowRate)
+            {
+                m_HasStartedDispensePress = false;
+                m_DispenseStopProgress = 0f;
+                m_DispenseElapsedSeconds = 0f;
+                m_InsertionHoldProgress = 0f;
+                m_HasInitialPlungerDistance = false;
+                m_HasPreviousNeedleTip = false;
+            }
+
+            if (nextStep == TutorialStep.InsertionSpeedFlowRate)
+            {
+                m_InsertionHoldProgress = 0f;
+                m_InsertionStableHoldProgress = 0f;
+                m_HasCompletedInsertionDepth = false;
+                m_HasStartedDispensePress = false;
+                m_DispenseStopProgress = 0f;
+                m_DispenseElapsedSeconds = 0f;
+                m_CurrentInsertionDepthCm = 0f;
+                m_EffectiveInsertionDepthTargetCm = m_MinInsertionDepthCm;
+                m_CurrentLateralStabilityCmPerSec = 0f;
+                m_CurrentPlungerPushRateCmPerSec = 0f;
+                m_ThumbTowardKnucklesRateCmPerSec = 0f;
+                m_PlungerTravelNormalized = 0f;
+                m_HasInitialPlungerDistance = false;
+                m_HasPreviousNeedleTip = false;
+                m_PostInjectionDepthHoldProgress = 0f;
+                m_PeakInsertionDepthCm = 0f;
+                m_HandDistanceFromCenterCm = 0f;
+                m_PreviousHandDistanceFromCenterCm = 0f;
+                m_CurrentAxialNeedleSpeedCmPerSec = 0f;
+                m_HasPreviousHandDistance = false;
+                m_HasInsertionDepthBaseline = false;
+                m_InsertionDepthBaselineThumbPlaneCm = 0f;
                 m_HasLockedContactPoint = false;
             }
 
