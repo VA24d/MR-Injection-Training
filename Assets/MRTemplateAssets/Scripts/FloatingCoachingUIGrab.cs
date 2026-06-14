@@ -100,6 +100,9 @@ namespace UnityEngine.XR.Templates.MR
         /// </summary>
         public bool AllowGoalManagerAutoFollow => !m_UserPinned && (m_Grab == null || !m_Grab.isSelected);
 
+        /// <summary>True while the panel is being actively grabbed/moved by the user.</summary>
+        public bool isGrabbed => m_Grab != null && m_Grab.isSelected;
+
         /// <summary>
         /// Call after the coaching card or canvas layout changes so the ray-grab strip matches the new bounds.
         /// </summary>

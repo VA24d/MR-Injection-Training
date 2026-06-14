@@ -115,6 +115,13 @@ namespace UnityEngine.XR.Templates.MR
         float m_HeightDragStartY;
         float m_HeightDragSurfaceStartY;
 
+        // Carry the placed surface (and thus the injection guide cone + snap target) with the coaching
+        // panel while the user grabs and moves it.
+        FloatingCoachingUIGrab m_PanelGrab;
+        bool m_HasPrevPanelPose;
+        Vector3 m_PrevPanelPos;
+        Quaternion m_PrevPanelRot = Quaternion.identity;
+
         Vector3 m_FirstPoint;
         Vector3 m_SecondPoint;
         Vector3 m_ThirdPoint;
@@ -137,6 +144,41 @@ namespace UnityEngine.XR.Templates.MR
 
             if (m_HasPlacedSurface)
                 ProcessHeightHandleDrag();
+
+            CarrySurfaceWithPanel();
+        }
+
+        // Rigidly carry the placed surface with the coaching panel while it is grabbed/moved, so the
+        // injection guide cone and the syringe snap target travel with the UI. Only while grabbed —
+        // head-follow of the panel does not drag the target.
+        void CarrySurfaceWithPanel()
+        {
+            if (m_PanelGrab == null)
+                m_PanelGrab = FindAnyObjectByType<FloatingCoachingUIGrab>();
+            if (m_PanelGrab == null || m_SurfacePlane == null || !m_HasPlacedSurface)
+            {
+                m_HasPrevPanelPose = false;
+                return;
+            }
+
+            var panel = m_PanelGrab.transform;
+            if (m_PanelGrab.isGrabbed && m_HasPrevPanelPose &&
+                !m_IsSelectingSurface && !m_IsDraggingHeightHandle)
+            {
+                // Re-express the surface in the panel's previous frame, then map back through the new
+                // panel pose (equivalent to parenting to the panel for this frame's motion).
+                var invOld = Quaternion.Inverse(m_PrevPanelRot);
+                var localPos = invOld * (m_SurfacePlane.position - m_PrevPanelPos);
+                var localRot = invOld * m_SurfacePlane.rotation;
+                m_SurfacePlane.SetPositionAndRotation(
+                    panel.position + panel.rotation * localPos,
+                    panel.rotation * localRot);
+                UpdateHeightHandleVisual();
+            }
+
+            m_PrevPanelPos = panel.position;
+            m_PrevPanelRot = panel.rotation;
+            m_HasPrevPanelPose = true;
         }
 
         void OnDestroy()
