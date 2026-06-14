@@ -399,6 +399,8 @@ namespace UnityEngine.XR.Templates.MR
             UpdatePlaneFromPoints();
         }
 
+        // Either hand may pinch to place the surface or drag the height handle. Pick the hand that is
+        // pinching most (smallest thumb-index gap) so the syringe hand or the free hand both work.
         bool TryGetPinchPose(out Vector3 pinchPoint, out float pinchDistance)
         {
             pinchPoint = default;
@@ -407,17 +409,30 @@ namespace UnityEngine.XR.Templates.MR
             if (m_HandSubsystem == null || !m_HandSubsystem.running)
                 return false;
 
-            var rightHand = m_HandSubsystem.rightHand;
-            if (!rightHand.isTracked)
-                return false;
+            var found = false;
+            var best = float.MaxValue;
+            EvaluatePinchHand(m_HandSubsystem.rightHand, ref found, ref best, ref pinchPoint, ref pinchDistance);
+            EvaluatePinchHand(m_HandSubsystem.leftHand, ref found, ref best, ref pinchPoint, ref pinchDistance);
+            return found;
+        }
 
-            if (!TryGetJointPose(rightHand, XRHandJointID.IndexTip, out var indexTipPose) ||
-                !TryGetJointPose(rightHand, XRHandJointID.ThumbTip, out var thumbTipPose))
-                return false;
+        static void EvaluatePinchHand(XRHand hand, ref bool found, ref float best,
+            ref Vector3 pinchPoint, ref float pinchDistance)
+        {
+            if (!hand.isTracked)
+                return;
+            if (!TryGetJointPose(hand, XRHandJointID.IndexTip, out var indexTipPose) ||
+                !TryGetJointPose(hand, XRHandJointID.ThumbTip, out var thumbTipPose))
+                return;
 
-            pinchPoint = 0.5f * (indexTipPose.position + thumbTipPose.position);
-            pinchDistance = Vector3.Distance(indexTipPose.position, thumbTipPose.position);
-            return true;
+            var d = Vector3.Distance(indexTipPose.position, thumbTipPose.position);
+            if (d < best)
+            {
+                best = d;
+                pinchPoint = 0.5f * (indexTipPose.position + thumbTipPose.position);
+                pinchDistance = d;
+                found = true;
+            }
         }
 
         void UpdatePlaneFromPoints()

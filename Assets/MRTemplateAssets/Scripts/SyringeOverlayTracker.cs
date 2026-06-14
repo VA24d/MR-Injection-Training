@@ -146,6 +146,19 @@ namespace UnityEngine.XR.Templates.MR
         [Tooltip("Fixed plunger-to-wings span (m) used in thumb-to-center mode.")]
         float m_FixedPlungerToWings = 0.032f;
 
+        [SerializeField, Range(0f, 1f)]
+        [Tooltip("Soft center-snap strength while approaching the site (0 = free aim, 1 = entry hard-pinned). The real syringe angle is always preserved; only the entry is nudged toward center.")]
+        float m_CenterSnapStrength = 0.4f;
+
+        [SerializeField, Range(0f, 1f)]
+        [Tooltip("Stronger soft snap once the needle tip is actually inserted (below the skin). Still < 1 so the entry assists rather than locks.")]
+        float m_InsertionSnapStrength = 0.7f;
+
+        [Header("Joint confidence (thumb + wings)")]
+        [SerializeField]
+        [Tooltip("Weight the reconstruction and smoothing by per-joint tracking confidence: when the index/middle wings are unreliable, lean on the stable hand frame + thumb; smooth more when confidence is low, snappier when high.")]
+        bool m_UseJointConfidence = true;
+
         [Header("Tracking glitch rejection")]
         [SerializeField, Min(0.5f)]
         [Tooltip("Max plausible hand speed (m/s). A single-frame jump faster than this is treated as a tracking glitch and the previous pose is held instead of jumping.")]
@@ -411,8 +424,9 @@ namespace UnityEngine.XR.Templates.MR
         bool m_IsNearInjectionSite;
         bool m_EntryHoleLatched;
         int m_ConsecutiveRejects;
-        Vector3 m_SmoothedThumb;
-        bool m_HasSmoothedThumb;
+        // Derived per-frame tracking confidence (0..1) for the thumb and the index/middle "wings".
+        float m_ThumbConfidence = 1f;
+        float m_WingConfidence = 1f;
 
         bool m_RightTapArmed;
         float m_RightTapArmedAt;
@@ -548,12 +562,16 @@ namespace UnityEngine.XR.Templates.MR
             }
             else
             {
+                // Overall confidence gates both jump-rejection and smoothing.
+                var conf = m_UseJointConfidence ? Mathf.Min(m_ThumbConfidence, m_WingConfidence) : 1f;
+
                 // Reject teleport-like single-frame jumps (tracking glitches): hold the last good
-                // pose instead of letting the syringe snap across the room. After a run of rejects,
-                // accept anyway so a genuine fast move / re-acquire is not frozen forever.
+                // pose instead of letting the syringe snap across the room. Only reject when the jump
+                // coincides with LOW confidence (a real glitch) — a confident fast move passes through
+                // so motion stays snappy. After a run of rejects, accept anyway to re-acquire.
                 var jump = Vector3.Distance(points.wingsCenter, m_SmoothedPoints.wingsCenter);
                 var maxJump = m_MaxTrackingSpeedMps * Mathf.Max(Time.deltaTime, 0.0001f);
-                if (jump > maxJump && m_ConsecutiveRejects < m_MaxConsecutiveRejects)
+                if (jump > maxJump && conf < 0.6f && m_ConsecutiveRejects < m_MaxConsecutiveRejects)
                 {
                     m_ConsecutiveRejects++;
                     // Hold pose: skip smoothing toward the glitch and skip the near-site redraw.
@@ -561,7 +579,11 @@ namespace UnityEngine.XR.Templates.MR
                 else
                 {
                     m_ConsecutiveRejects = 0;
-                    var t = 1f - Mathf.Pow(1f - m_PositionSmoothing, Time.deltaTime * 90f);
+                    // Snappier when confident, smoother (more lag) when joints are unreliable.
+                    var posSmooth = m_UseJointConfidence
+                        ? Mathf.Clamp01(m_PositionSmoothing * Mathf.Lerp(0.6f, 1.3f, conf))
+                        : m_PositionSmoothing;
+                    var t = 1f - Mathf.Pow(1f - posSmooth, Time.deltaTime * 90f);
                     SmoothTo(ref m_SmoothedPoints.plunger, points.plunger, t);
                     SmoothTo(ref m_SmoothedPoints.leftWing, points.leftWing, t);
                     SmoothTo(ref m_SmoothedPoints.rightWing, points.rightWing, t);
@@ -637,7 +659,6 @@ namespace UnityEngine.XR.Templates.MR
                 m_CenterLockEngaged = false;
                 m_HasLockedDir = false;
                 m_ThumbToCenterActive = false;
-                m_HasSmoothedThumb = false;
                 m_EntryHoleLatched = false;
             }
         }
@@ -690,7 +711,6 @@ namespace UnityEngine.XR.Templates.MR
             {
                 m_CenterLockEngaged = false;
                 m_HasLockedDir = false;
-                m_HasSmoothedThumb = false;
                 m_EntryHoleLatched = false;
                 return;
             }
@@ -701,109 +721,67 @@ namespace UnityEngine.XR.Templates.MR
                 return;
             }
 
-            var thumb = m_RawThumbTip;
+            // Keep the user's REAL reconstructed pose (so the actual entry angle is preserved) and
+            // only nudge the whole syringe softly toward the site center. We never rebuild a rigid
+            // thumb->center line, which used to discard the real aim and feel glued/drifting.
             var plane = new Plane(m_SnapNormal, m_SnapCenter);
-            var thumbPlaneDist = Mathf.Abs(plane.GetDistanceToPoint(thumb));
-            var lateralDist = Vector3.ProjectOnPlane(thumb - m_SnapCenter, m_SnapNormal).magnitude;
-
-            // Wrist entry-hole latch: the wrist is far less occluded than the thumb, so use it to
-            // hold the thumb-to-center draw engaged once insertion starts. Without this the thumb
-            // proximity flickers out, falls back to the lateral-snap center-lock, and the syringe
-            // visibly jumps. Latch on (wrist near + needle reaching the surface), release with
-            // hysteresis once the wrist clearly leaves.
-            if (m_UseWristEntryLatch && m_HasRawWrist)
+            var axis = m_SmoothedPoints.needleTip - m_SmoothedPoints.plunger;
+            if (axis.sqrMagnitude < 1e-8f)
             {
-                var wristPlaneDist = Mathf.Abs(plane.GetDistanceToPoint(m_RawWristPos));
-                var wristLateral = Vector3.ProjectOnPlane(m_RawWristPos - m_SnapCenter, m_SnapNormal).magnitude;
-                var tipPlaneDist = Mathf.Abs(plane.GetDistanceToPoint(m_SmoothedPoints.needleTip));
-                var wristNear = wristPlaneDist <= m_WristLatchPlaneDistance && wristLateral <= m_WristLatchRadius;
-                var wristFar = wristPlaneDist > m_WristLatchPlaneDistance + m_WristLatchReleaseMargin ||
-                               wristLateral > m_WristLatchRadius + m_WristLatchReleaseMargin;
-
-                if (!m_EntryHoleLatched && wristNear && tipPlaneDist <= m_EntryLatchTipDistance)
-                    m_EntryHoleLatched = true;
-                else if (m_EntryHoleLatched && wristFar)
-                    m_EntryHoleLatched = false;
+                m_ThumbToCenterActive = false;
+                return;
             }
-            else
+            axis.Normalize();
+
+            var denom = Vector3.Dot(m_SnapNormal, axis);
+            if (Mathf.Abs(denom) < 1e-5f)
             {
+                // Needle ~parallel to the surface: no meaningful entry to center.
+                m_ThumbToCenterActive = false;
+                return;
+            }
+
+            var s = Vector3.Dot(m_SnapNormal, m_SnapCenter - m_SmoothedPoints.needleTip) / denom;
+            var entry = m_SmoothedPoints.needleTip + axis * s;
+            var lateral = Vector3.ProjectOnPlane(m_SnapCenter - entry, m_SnapNormal);
+            var lateralDist = lateral.magnitude;
+
+            // Engage zone: thumb near the surface OR wrist near (the wrist is far less occluded than
+            // the thumb), and the entry is within reach of the site.
+            var thumbPlaneDist = Mathf.Abs(plane.GetDistanceToPoint(m_RawThumbTip));
+            var wristNear = m_UseWristEntryLatch && m_HasRawWrist &&
+                Mathf.Abs(plane.GetDistanceToPoint(m_RawWristPos)) <= m_WristLatchPlaneDistance &&
+                Vector3.ProjectOnPlane(m_RawWristPos - m_SnapCenter, m_SnapNormal).magnitude <= m_WristLatchRadius;
+            var near = (thumbPlaneDist <= m_ProximityPlaneDistance || wristNear) &&
+                       lateralDist <= m_SnapRadius + m_ProximityApproachLateralMargin;
+
+            if (!near)
+            {
+                m_ThumbToCenterActive = false;
                 m_EntryHoleLatched = false;
-            }
-
-            var engage = m_EntryHoleLatched ||
-                         (thumbPlaneDist <= m_ProximityPlaneDistance &&
-                          lateralDist <= m_SnapRadius);
-
-            if (!engage)
-            {
-                m_HasSmoothedThumb = false;
-                ApplyCenterLock();
                 return;
             }
 
-            if (!m_HasSmoothedThumb)
-            {
-                m_SmoothedThumb = thumb;
-                m_HasSmoothedThumb = true;
-            }
-            else
-            {
-                var thumbT = 1f - Mathf.Pow(1f - Mathf.Clamp01(m_PositionSmoothing * 0.5f), Time.deltaTime * 90f);
-                m_SmoothedThumb = Vector3.Lerp(m_SmoothedThumb, thumb, thumbT);
-            }
+            // Soft partial snap: translate the whole syringe in-plane toward center by a fraction,
+            // never fully. Stronger once the needle tip is actually below the skin (real insertion),
+            // but still < 1 so the entry assists rather than locks.
+            var insertedDepth = Vector3.Dot(m_SnapNormal, m_SnapCenter - m_SmoothedPoints.needleTip);
+            var inserted = insertedDepth > 0f; // tip on the far side of the skin plane
+            var strength = Mathf.Clamp01(inserted ? m_InsertionSnapStrength : m_CenterSnapStrength);
 
-            var plunger = m_SmoothedThumb;
-            var toCenter = m_SnapCenter - plunger;
-            if (toCenter.sqrMagnitude < 1e-8f)
-                return;
+            var offset = lateral * strength;
+            m_SmoothedPoints.plunger += offset;
+            m_SmoothedPoints.wingsCenter += offset;
+            m_SmoothedPoints.leftWing += offset;
+            m_SmoothedPoints.rightWing += offset;
+            m_SmoothedPoints.barrelEnd += offset;
+            m_SmoothedPoints.needleTip += offset;
+            m_SmoothedPoints.needleBase += offset;
 
-            var axis = toCenter.normalized;
             m_ThumbToCenterActive = true;
             m_ThumbToCenterAxis = axis;
             m_CenterLockEngaged = true;
-            m_LockedDir = axis;
-            m_HasLockedDir = true;
-
-            var plungerToWings = m_FixedPlungerToWings;
-            var wingsCenter = plunger + axis * plungerToWings;
-            var sideAxis = Vector3.Cross(axis, m_SnapNormal);
-            if (sideAxis.sqrMagnitude < 1e-8f)
-                sideAxis = Vector3.Cross(axis, Vector3.up);
-            sideAxis.Normalize();
-            var halfWing = 0.008f;
-
-            var rebuilt = new SyringePoints
-            {
-                plunger = plunger,
-                wingsCenter = wingsCenter,
-                leftWing = wingsCenter + sideAxis * halfWing,
-                rightWing = wingsCenter - sideAxis * halfWing,
-                barrelEnd = plunger + axis * (plungerToWings + m_WingsToBarrelEnd),
-                needleTip = plunger + axis * (plungerToWings + m_WingsToBarrelEnd + m_BarrelEndToNeedleTip),
-            };
-            var metal = Mathf.Min(m_MetalNeedleLength, m_BarrelEndToNeedleTip);
-            rebuilt.needleBase = rebuilt.needleTip - axis * metal;
-
-            SnapSyringeEntryToSiteCenter(ref rebuilt, axis);
-            m_SmoothedPoints = rebuilt;
-        }
-
-        void SnapSyringeEntryToSiteCenter(ref SyringePoints points, Vector3 axis)
-        {
-            var denom = Vector3.Dot(m_SnapNormal, axis);
-            if (Mathf.Abs(denom) < 1e-5f)
-                return;
-
-            var s = Vector3.Dot(m_SnapNormal, m_SnapCenter - points.needleTip) / denom;
-            var entry = points.needleTip + axis * s;
-            var offset = Vector3.ProjectOnPlane(m_SnapCenter - entry, m_SnapNormal);
-            points.plunger += offset;
-            points.wingsCenter += offset;
-            points.leftWing += offset;
-            points.rightWing += offset;
-            points.barrelEnd += offset;
-            points.needleTip += offset;
-            points.needleBase += offset;
+            m_EntryHoleLatched = inserted;
         }
 
         /// <summary>
@@ -1071,6 +1049,27 @@ namespace UnityEngine.XR.Templates.MR
 
             var axisFromContacts = axisVector.normalized;
 
+            // Per-joint confidence (geometry-derived; XR Hands exposes no continuous confidence):
+            //  - wings: index/middle separation within a plausible grip band (it collapses when the
+            //    fingers curl or occlude) and the thumb->wing span within the expected range;
+            //  - thumb: span non-degenerate.
+            var wingSep = Vector3.ProjectOnPlane(indexWingRaw - middleWingRaw, axisFromContacts).magnitude;
+            var sepConf = Mathf.Clamp01((wingSep - 0.004f) / 0.012f);   // 0 at <=4mm, 1 at >=16mm
+            var span = axisVector.magnitude;
+            var spanConf = (span >= m_MinPlungerToWings && span <= m_MaxPlungerToWings)
+                ? 1f
+                : Mathf.Clamp01(1f - Mathf.Max(m_MinPlungerToWings - span, span - m_MaxPlungerToWings) / 0.03f);
+            var wingConf = Mathf.Min(sepConf, spanConf);
+            var thumbConf = Mathf.Clamp01(span / Mathf.Max(0.001f, m_MinPlungerToWings));
+            // Low-pass the confidences so they do not add their own jitter.
+            m_WingConfidence = Mathf.Lerp(m_WingConfidence, wingConf, 0.2f);
+            m_ThumbConfidence = Mathf.Lerp(m_ThumbConfidence, thumbConf, 0.2f);
+
+            // When the wings are unreliable, lean almost entirely on the stable hand frame.
+            var frameBlend = m_UseJointConfidence
+                ? Mathf.Lerp(0.98f, m_HandFrameDirectionBlend, m_WingConfidence)
+                : m_HandFrameDirectionBlend;
+
             // Non-invertible "out of the hand" reference (wrist -> middle finger). Unlike the
             // thumb->finger contact axis, this does not reverse when the thumb occludes or the
             // fingers curl, so it anchors the syringe direction sign and prevents 180-degree flips.
@@ -1086,7 +1085,7 @@ namespace UnityEngine.XR.Templates.MR
                 m_HasRawWrist = false;
             }
 
-            var axis = GetStabilizedDirection(leftHand, axisFromContacts, indexWingRaw, middleWingRaw, handOut);
+            var axis = GetStabilizedDirection(leftHand, axisFromContacts, indexWingRaw, middleWingRaw, handOut, frameBlend);
 
             var projectedDistance = Mathf.Abs(Vector3.Dot(axisVector, axis));
             if (projectedDistance < 0.0001f)
@@ -1130,7 +1129,7 @@ namespace UnityEngine.XR.Templates.MR
             return true;
         }
 
-        Vector3 GetStabilizedDirection(XRHand leftHand, Vector3 axisFromContacts, Vector3 indexWingRaw, Vector3 middleWingRaw, Vector3 handOut)
+        Vector3 GetStabilizedDirection(XRHand leftHand, Vector3 axisFromContacts, Vector3 indexWingRaw, Vector3 middleWingRaw, Vector3 handOut, float handFrameBlend)
         {
             // Sign-correct the source axis up front so the hand-frame blend and grip calibration
             // both inherit the correct (out-of-hand) orientation.
@@ -1143,7 +1142,7 @@ namespace UnityEngine.XR.Templates.MR
             {
                 if (TryGetCalibratedHandDirection(leftHand, axisFromContacts, out var axisFromHandFrame))
                 {
-                    axis = Vector3.Slerp(axisFromContacts, axisFromHandFrame, m_HandFrameDirectionBlend).normalized;
+                    axis = Vector3.Slerp(axisFromContacts, axisFromHandFrame, handFrameBlend).normalized;
                 }
                 else
                 {
@@ -1170,7 +1169,7 @@ namespace UnityEngine.XR.Templates.MR
                                 if (Vector3.Dot(axisFromHandFrame, axisFromContacts) < 0f)
                                     axisFromHandFrame = -axisFromHandFrame;
 
-                                axis = Vector3.Slerp(axisFromContacts, axisFromHandFrame, m_HandFrameDirectionBlend).normalized;
+                                axis = Vector3.Slerp(axisFromContacts, axisFromHandFrame, handFrameBlend).normalized;
                             }
                         }
                     }

@@ -1461,9 +1461,6 @@ namespace UnityEngine.XR.Templates.MR
 
         void OnPreviousStepButtonClicked()
         {
-            // TEMP DIAGNOSTIC: confirms the tap reaches this handler (vs raycast/occlusion eating it).
-            Debug.Log($"[Coaching] Previous tapped. tutorial={(m_InjectionTutorial != null)} step={(m_InjectionTutorial != null ? m_InjectionTutorial.currentStep.ToString() : "null")}", this);
-
             if (m_InjectionTutorial == null)
                 return;
 
@@ -1612,7 +1609,7 @@ namespace UnityEngine.XR.Templates.MR
                     Set(m_CreateSurfaceButtonObject, false);
                     Set(m_SkeletonToggleButtonObject, false);
                     Set(m_PreviousStepButtonObject, true);
-                    Set(m_NextStepButtonObject, false);
+                    Set(m_NextStepButtonObject, true); // repurposed as the Restart button at the end
                     Set(m_SwapHandsButtonObject, false);
                     Set(m_InjectionTypeButtonObject, false);
                     Set(m_DemoVideoButtonObject, demoOk);
@@ -1856,6 +1853,12 @@ namespace UnityEngine.XR.Templates.MR
 
         string BuildNextStepButtonLabel()
         {
+            // On the score screen the Next button is repurposed to restart the run
+            // (OnNextStepButtonClicked -> ForceCompleteGoal -> ResetCoaching when finished).
+            if (m_InjectionTutorial != null &&
+                (m_InjectionTutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.FinalScore ||
+                 m_InjectionTutorial.isFinished))
+                return "Restart";
             return m_NextStepLabel;
         }
 

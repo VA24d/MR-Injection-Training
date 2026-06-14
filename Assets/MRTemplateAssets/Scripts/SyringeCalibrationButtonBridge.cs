@@ -669,7 +669,7 @@ namespace UnityEngine.XR.Templates.MR
                     GoToStep(TutorialStep.CleanSurfaceAlcohol);
                     break;
                 case TutorialStep.CleanSurfaceAlcohol:
-                    GoToStep(TutorialStep.Insertion);
+                    GoToStep(TutorialStep.InjectionAngle);
                     break;
                 case TutorialStep.InjectionAngle:
                     GoToStep(TutorialStep.Insertion);
@@ -721,7 +721,7 @@ namespace UnityEngine.XR.Templates.MR
                     GoToStep(TutorialStep.CleanSurfaceAlcohol);
                     break;
                 case TutorialStep.Insertion:
-                    GoToStep(TutorialStep.CleanSurfaceAlcohol);
+                    GoToStep(TutorialStep.InjectionAngle);
                     break;
                 case TutorialStep.FlowRate:
                     GoToStep(TutorialStep.Insertion);
