@@ -19,6 +19,16 @@ namespace UnityEngine.XR.Templates.MR
         bool m_DrawHandMeshes = true;
 
         [SerializeField]
+        [Tooltip("Also show the faint translucent Meta hand mesh alongside the skeleton. The HandVisualizer ships with no hand-mesh material assigned, so we create and assign a transparent one.")]
+        bool m_ShowFaintHandMesh = true;
+
+        [SerializeField]
+        [Tooltip("Colour/alpha of the faint hand-mesh overlay (low alpha = faint).")]
+        Color m_FaintHandMeshColor = new Color(0.7f, 0.85f, 1f, 0.16f);
+
+        Material m_FaintHandMeshMaterial;
+
+        [SerializeField]
         bool m_ForceDisableHandRemoval = true;
 
         [SerializeField]
@@ -50,6 +60,7 @@ namespace UnityEngine.XR.Templates.MR
         void Start()
         {
             ResolveReferences();
+            EnsureFaintHandMesh();
             ApplyLabelText();
             BindToggle();
             ApplyState(m_ShowSkeletonByDefault);
@@ -60,6 +71,8 @@ namespace UnityEngine.XR.Templates.MR
         {
             if (m_Toggle != null)
                 m_Toggle.onValueChanged.RemoveListener(OnToggleValueChanged);
+            if (m_FaintHandMeshMaterial != null)
+                Destroy(m_FaintHandMeshMaterial);
         }
 
         void ResolveReferences()
@@ -155,6 +168,56 @@ namespace UnityEngine.XR.Templates.MR
             // Ensure any existing persistent UI callback cannot leave hand-removal enabled.
             yield return null;
             m_OcclusionManager.SetHandHandRemovalEnabled(false);
+        }
+
+        // The XR Hands HandVisualizer ships with m_HandMeshMaterial unassigned, so the synthetic hand
+        // mesh never renders. Create a faint transparent material and assign it, then bounce the
+        // visualizer so it rebuilds its hand meshes with the material.
+        void EnsureFaintHandMesh()
+        {
+            if (!m_ShowFaintHandMesh || m_HandVisualizer == null)
+                return;
+
+            var matField = m_HandVisualizer.GetType().GetField("m_HandMeshMaterial",
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.Public |
+                System.Reflection.BindingFlags.NonPublic);
+            if (matField == null)
+                return;
+
+            if (m_FaintHandMeshMaterial == null)
+                m_FaintHandMeshMaterial = CreateFaintHandMaterial();
+
+            matField.SetValue(m_HandVisualizer, m_FaintHandMeshMaterial);
+            m_DrawHandMeshes = true; // allow the mesh to draw alongside the skeleton
+
+            // If the visualizer already ran OnEnable with the material unassigned, bounce it so the
+            // hand meshes are rebuilt using the faint material.
+            if (m_HandVisualizer is Behaviour beh && beh.isActiveAndEnabled)
+            {
+                beh.enabled = false;
+                beh.enabled = true;
+            }
+        }
+
+        Material CreateFaintHandMaterial()
+        {
+            var shader = Shader.Find("Universal Render Pipeline/Unlit")
+                         ?? Shader.Find("Sprites/Default")
+                         ?? Shader.Find("Unlit/Color");
+            var mat = new Material(shader) { name = "FaintHandOverlay" };
+
+            // URP transparent setup (mirrors the other runtime-created overlays).
+            if (mat.HasProperty("_Surface")) mat.SetFloat("_Surface", 1f);
+            if (mat.HasProperty("_Blend")) mat.SetFloat("_Blend", 0f);
+            if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", m_FaintHandMeshColor);
+            if (mat.HasProperty("_Color")) mat.SetColor("_Color", m_FaintHandMeshColor);
+            mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+            if (mat.HasProperty("_SrcBlend")) mat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            if (mat.HasProperty("_DstBlend")) mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            if (mat.HasProperty("_ZWrite")) mat.SetInt("_ZWrite", 0);
+            mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+            return mat;
         }
 
         void SetVisualizerBool(string propertyName, bool value)
