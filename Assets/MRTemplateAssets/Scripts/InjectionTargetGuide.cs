@@ -166,12 +166,14 @@ namespace UnityEngine.XR.Templates.MR
 
             Vector3 spot;
             Vector3 normal;
+            Vector3 surfaceForward = Vector3.forward;
             bool previewMode;
             if (m_SurfaceSelectionTool != null && m_SurfaceSelectionTool.TryGetPlacedSurface(out var surfacePose, out _))
             {
                 spot = surfacePose.position;
                 normal = surfacePose.up;
                 normal = normal.sqrMagnitude < 0.000001f ? Vector3.up : normal.normalized;
+                surfaceForward = surfacePose.forward;
                 previewMode = false;
                 m_PreviewActive = false;
             }
@@ -202,23 +204,30 @@ namespace UnityEngine.XR.Templates.MR
             // m_Tracker is null (TryGetSyringePose is then never called).
             SyringeOverlayTracker.SyringePoseData syringe = default;
             var hasPose = m_Tracker != null && m_Tracker.TryGetSyringePose(out syringe);
-            var syringeForward = hasPose ? syringe.forward : Vector3.zero;
+            var thumbEngaged = m_Tracker != null && m_Tracker.isThumbToCenterMode;
+            var nearSite = m_Tracker != null &&
+                           (m_Tracker.isThumbToCenterMode || m_Tracker.isNearInjectionSite);
+            var pipelineStep = step == SyringeCalibrationButtonBridge.TutorialStep.Insertion ||
+                               step == SyringeCalibrationButtonBridge.TutorialStep.FlowRate ||
+                               step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate ||
+                               step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed;
 
-            // Spot disc shrinks as the needle nears the surface — but stays fixed in preview (no
-            // real surface, so the hand-to-spot distance is meaningless and would make it pulse).
+            // Spot disc shrinks as the thumb nears the surface center — only meaningful once engaged.
             float diameter;
             if (previewMode)
             {
                 diameter = m_SpotMaxDiameter;
             }
+            else if (thumbEngaged || nearSite)
+            {
+                var thumbDistance = Mathf.Abs(Vector3.Dot(m_Tracker.rawThumbTip - spot, normal));
+                diameter = Mathf.Lerp(m_SpotMinDiameter, m_SpotMaxDiameter,
+                    Mathf.Clamp01(thumbDistance / Mathf.Max(0.001f, m_SpotShrinkRangeMeters)));
+                diameter = Mathf.Max(diameter, m_SpotMinDiameter);
+            }
             else
             {
-                var needleDistance = hasPose
-                    ? Mathf.Abs(Vector3.Dot(syringe.needleTip - spot, normal))
-                    : m_SpotShrinkRangeMeters;
-                diameter = Mathf.Lerp(m_SpotMinDiameter, m_SpotMaxDiameter,
-                    Mathf.Clamp01(needleDistance / Mathf.Max(0.001f, m_SpotShrinkRangeMeters)));
-                diameter = Mathf.Max(diameter, m_SpotMinDiameter);
+                diameter = m_SpotMaxDiameter;
             }
             PlaceDisc(m_Spot, spot + normal * 0.001f, normal, diameter * 0.5f);
 
@@ -232,25 +241,50 @@ namespace UnityEngine.XR.Templates.MR
             m_ConeBand.SetPositionAndRotation(spot, Quaternion.FromToRotation(Vector3.up, normal));
             BuildConeRibs(bandFromNormal);
 
-            // Tint the band green while the live injection angle is inside the valid range.
+            // Tint the band green only while thumb-locked and the live angle is in range.
             var angle = m_Tutorial.injectionAngleDegrees;
-            var inRange = angle >= range.x && angle <= range.y;
+            var inRange = nearSite && angle >= range.x && angle <= range.y;
             SetBandColor(inRange ? m_BandInRangeColor : m_BandColor);
 
-            // Depth zones: a tapering channel below the skin along the ideal needle path. Green =
-            // correct depth (skin -> accurate), red = too deep (accurate -> max), orange disk = max.
-            // In preview, drive the depth azimuth from the fixed anchored heading (not the live hand),
-            // so the channel does not swing around with hand movement.
-            var headingForward = previewMode ? m_PreviewHeading : syringeForward;
+            // Depth zones stay anchored at the surface center. Only swing with the live thumb axis
+            // once proximity lock engages; otherwise keep a stable nominal heading at the spot.
+            Vector3 headingForward;
+            if (previewMode)
+                headingForward = m_PreviewHeading;
+            else if (thumbEngaged)
+                headingForward = m_Tracker.thumbToCenterAxis;
+            else if (nearSite)
+            {
+                headingForward = spot - m_Tracker.rawThumbTip;
+                if (headingForward.sqrMagnitude < 0.000001f)
+                    headingForward = Vector3.ProjectOnPlane(surfaceForward, normal);
+                else
+                    headingForward.Normalize();
+            }
+            else if (pipelineStep)
+            {
+                headingForward = Vector3.ProjectOnPlane(surfaceForward, normal);
+                if (headingForward.sqrMagnitude < 0.000001f)
+                    headingForward = Vector3.ProjectOnPlane(Vector3.forward, normal);
+            }
+            else if (hasPose)
+                headingForward = syringe.forward;
+            else
+                headingForward = Vector3.ProjectOnPlane(Vector3.forward, normal);
+
             var ideal = ComputeIdealInjectionAxis(normal, headingForward);
             var greenMeters = m_Tutorial.currentInjectionGreenDepthCm * 0.01f;
             var maxMeters = Mathf.Max(greenMeters + 0.001f, m_Tutorial.currentInjectionMaxDepthCm * 0.01f);
             EnsureDepthMeshes(greenMeters, maxMeters);
 
             var depthRotation = Quaternion.FromToRotation(Vector3.up, ideal);
+            var showDepthChannels = !pipelineStep || thumbEngaged || nearSite;
             m_GreenChannel.SetPositionAndRotation(spot, depthRotation);
             m_RedChannel.SetPositionAndRotation(spot, depthRotation);
+            m_GreenChannel.gameObject.SetActive(showDepthChannels);
+            m_RedChannel.gameObject.SetActive(showDepthChannels);
             PlaceDisc(m_OrangePlane, spot + ideal * maxMeters, ideal, DepthRadiusAt(maxMeters, maxMeters) + 0.003f);
+            m_OrangePlane.gameObject.SetActive(showDepthChannels);
 
             SetVisible(true);
             return true;

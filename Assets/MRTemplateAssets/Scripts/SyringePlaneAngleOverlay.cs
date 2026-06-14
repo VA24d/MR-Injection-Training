@@ -5,6 +5,7 @@ namespace UnityEngine.XR.Templates.MR
     /// <summary>
     /// Renders a live syringe-vs-surface angle overlay when the needle tip is near a placed surface.
     /// </summary>
+    [DefaultExecutionOrder(100)]
     public class SyringePlaneAngleOverlay : MonoBehaviour
     {
         struct OverlayData
@@ -65,6 +66,12 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField]
         Color m_PlaneReferenceColor = new Color(0.55f, 0.95f, 1f, 0.95f);
 
+        [SerializeField]
+        Color m_ThumbToCenterLineColor = new Color(0.35f, 1f, 0.55f, 0.92f);
+
+        [SerializeField, Min(0.0002f)]
+        float m_ThumbToCenterLineWidth = 0.0022f;
+
         [Header("Angle text")]
         [SerializeField]
         bool m_ShowAngleText = true;
@@ -123,6 +130,7 @@ namespace UnityEngine.XR.Templates.MR
         Transform m_Root;
         LineRenderer m_DropLine;
         LineRenderer m_PlaneReferenceLine;
+        LineRenderer m_ThumbToCenterLine;
         LineRenderer m_ArcLine;
         TextMesh m_AngleText;
         LineRenderer m_GuidanceArrow;
@@ -192,16 +200,75 @@ namespace UnityEngine.XR.Templates.MR
             if (!m_SurfaceSelectionTool.TryGetPlacedSurface(out var surfacePose, out var surfaceSizeMeters))
                 return false;
 
-            var syringeDirection = syringePose.forward;
-            if (syringeDirection.sqrMagnitude < 0.000001f)
-                return false;
-            syringeDirection.Normalize();
-
             var planeNormal = surfacePose.up;
             if (planeNormal.sqrMagnitude < 0.000001f)
                 planeNormal = Vector3.up;
             else
                 planeNormal.Normalize();
+
+            var step = m_Tutorial != null ? m_Tutorial.currentStep : SyringeCalibrationButtonBridge.TutorialStep.Start;
+            var pipelineStep = step == SyringeCalibrationButtonBridge.TutorialStep.Insertion ||
+                               step == SyringeCalibrationButtonBridge.TutorialStep.FlowRate ||
+                               step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate;
+            var siteStep = step == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle || pipelineStep;
+
+            if (!siteStep)
+                return false;
+
+            // Insertion pipeline: angle + coaching arrows only at the placed-surface center once the
+            // hand is approaching or locked to the site — never at arbitrary plane intersections.
+            var nearSite = m_Tracker.isThumbToCenterMode || m_Tracker.isNearInjectionSite;
+            if (pipelineStep && !nearSite)
+                return false;
+
+            if (nearSite)
+            {
+                var centerPoint = m_Tracker.injectionSiteCenter;
+                if (centerPoint.sqrMagnitude < 0.000001f)
+                    centerPoint = surfacePose.position;
+
+                var thumbTip = m_Tracker.rawThumbTip;
+                var axis = m_Tracker.isThumbToCenterMode
+                    ? m_Tracker.thumbToCenterAxis
+                    : centerPoint - thumbTip;
+                if (axis.sqrMagnitude < 0.000001f)
+                    return false;
+                axis.Normalize();
+
+                var centerArc = Mathf.Max(0.012f, Vector3.Distance(thumbTip, centerPoint));
+                var centerTipDir = axis;
+                var centerPlaneDir = Vector3.ProjectOnPlane(centerTipDir, planeNormal);
+                if (centerPlaneDir.sqrMagnitude < 0.000001f)
+                    centerPlaneDir = Vector3.ProjectOnPlane(surfacePose.forward, planeNormal);
+                if (centerPlaneDir.sqrMagnitude < 0.000001f)
+                    centerPlaneDir = Vector3.Cross(planeNormal, Vector3.right);
+                centerPlaneDir.Normalize();
+
+                var centerAngle = m_Tutorial != null
+                    ? m_Tutorial.injectionAngleDegrees
+                    : Vector3.Angle(centerPlaneDir, centerTipDir);
+                overlayData = new OverlayData
+                {
+                    tip = thumbTip,
+                    projectedTip = centerPoint,
+                    insertionPoint = centerPoint,
+                    planeNormal = planeNormal,
+                    planeDirection = centerPlaneDir,
+                    tipDirection = centerTipDir,
+                    angleDegrees = centerAngle,
+                    distanceMeters = centerArc,
+                    arcRadius = centerArc,
+                };
+                return true;
+            }
+
+            if (pipelineStep)
+                return false;
+
+            var syringeDirection = syringePose.forward;
+            if (syringeDirection.sqrMagnitude < 0.000001f)
+                return false;
+            syringeDirection.Normalize();
 
             var plane = new Plane(planeNormal, surfacePose.position);
             var tip = syringePose.needleTip;
@@ -209,7 +276,6 @@ namespace UnityEngine.XR.Templates.MR
             var distanceMeters = Mathf.Abs(signedDistance);
             var effectiveMaxTipPlaneDistance = m_MaxTipPlaneDistance;
             var requireInsideSurface = m_RequireProjectionInsideSurface;
-            var step = m_Tutorial != null ? m_Tutorial.currentStep : SyringeCalibrationButtonBridge.TutorialStep.Start;
 
             if (m_Tutorial != null)
             {
@@ -217,17 +283,6 @@ namespace UnityEngine.XR.Templates.MR
                 {
                     effectiveMaxTipPlaneDistance = Mathf.Max(effectiveMaxTipPlaneDistance, m_AngleModeMaxTipPlaneDistance);
                     requireInsideSurface = false;
-                }
-                else if (step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate)
-                {
-                    // Keep insertion/flow guidance only when syringe is near the site.
-                    effectiveMaxTipPlaneDistance = Mathf.Max(effectiveMaxTipPlaneDistance, 0.03f);
-                    requireInsideSurface = false;
-                }
-                else
-                {
-                    // Overlay is relevant only for angle and insertion/flow steps.
-                    return false;
                 }
             }
 
@@ -311,7 +366,11 @@ namespace UnityEngine.XR.Templates.MR
 
             if (m_DropLine != null)
             {
-                var showAngleLines = m_Tutorial != null && m_Tutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle;
+                var showAngleLines = m_Tutorial != null &&
+                    (m_Tutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle ||
+                     (m_Tutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.Insertion &&
+                      m_Tracker != null &&
+                      (m_Tracker.isThumbToCenterMode || m_Tracker.isNearInjectionSite)));
                 m_DropLine.positionCount = 2;
                 m_DropLine.startWidth = m_LineWidth;
                 m_DropLine.endWidth = m_LineWidth;
@@ -322,9 +381,31 @@ namespace UnityEngine.XR.Templates.MR
                 m_DropLine.enabled = showAngleLines;
             }
 
+            if (m_ThumbToCenterLine != null)
+            {
+                var showThumbLine = m_Tracker != null &&
+                    (m_Tracker.isThumbToCenterMode || m_Tracker.isNearInjectionSite) &&
+                    m_Tutorial != null &&
+                    (m_Tutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.Insertion ||
+                     m_Tutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.FlowRate ||
+                     m_Tutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate);
+                m_ThumbToCenterLine.positionCount = 2;
+                m_ThumbToCenterLine.startWidth = m_ThumbToCenterLineWidth;
+                m_ThumbToCenterLine.endWidth = m_ThumbToCenterLineWidth;
+                m_ThumbToCenterLine.startColor = m_ThumbToCenterLineColor;
+                m_ThumbToCenterLine.endColor = m_ThumbToCenterLineColor;
+                m_ThumbToCenterLine.SetPosition(0, data.tip);
+                m_ThumbToCenterLine.SetPosition(1, data.insertionPoint);
+                m_ThumbToCenterLine.enabled = showThumbLine;
+            }
+
             if (m_PlaneReferenceLine != null)
             {
-                var showAngleLines = m_Tutorial != null && m_Tutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle;
+                var showAngleLines = m_Tutorial != null &&
+                    (m_Tutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle ||
+                     (m_Tutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.Insertion &&
+                      m_Tracker != null &&
+                      (m_Tracker.isThumbToCenterMode || m_Tracker.isNearInjectionSite)));
                 m_PlaneReferenceLine.positionCount = 2;
                 m_PlaneReferenceLine.startWidth = m_LineWidth;
                 m_PlaneReferenceLine.endWidth = m_LineWidth;
@@ -357,7 +438,10 @@ namespace UnityEngine.XR.Templates.MR
             if (m_AngleText != null)
             {
                 var isAngleStep = m_Tutorial != null &&
-                                  m_Tutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle;
+                    (m_Tutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle ||
+                     (m_Tutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.Insertion &&
+                      m_Tracker != null &&
+                      (m_Tracker.isThumbToCenterMode || m_Tracker.isNearInjectionSite)));
                 var textVisible = m_ShowAngleText && isAngleStep;
                 m_AngleText.gameObject.SetActive(textVisible);
                 if (textVisible)
@@ -451,45 +535,98 @@ namespace UnityEngine.XR.Templates.MR
                     text += " (target " + range.x.ToString("F0") + "-" + range.y.ToString("F0") + " deg)";
                 }
             }
+            else if (m_GuidanceStep == SyringeCalibrationButtonBridge.TutorialStep.Insertion)
+            {
+                var needDepth = m_Tutorial.currentInsertionDepthCm < m_Tutorial.effectiveInsertionDepthTargetCm * 0.85f;
+                var unstable = m_Tutorial.currentLateralStabilityCmPerSec > m_Tutorial.maxLateralStabilityCmPerSec;
+
+                if (needDepth)
+                {
+                    showArrow = true;
+                    arrowDir = -data.planeNormal;
+                    text = "Move hand closer / insert";
+                }
+                else if (unstable)
+                {
+                    showArrow = true;
+                    arrowDir = -Vector3.ProjectOnPlane(data.tipDirection, data.planeNormal);
+                    if (arrowDir.sqrMagnitude < 0.000001f)
+                        arrowDir = data.planeNormal;
+                    text = "Steady hand";
+                }
+                else
+                {
+                    showDot = true;
+                    color = m_GuidanceGoodColor;
+                    text = "Hold or start dispensing";
+                }
+            }
+            else if (m_GuidanceStep == SyringeCalibrationButtonBridge.TutorialStep.FlowRate ||
+                     m_GuidanceStep == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate)
+            {
+                var flowDelta = m_Tutorial.flowRateMlPerSec - m_Tutorial.targetFlowRateMlPerSec;
+                var unstable = m_Tutorial.currentLateralStabilityCmPerSec > m_Tutorial.maxLateralStabilityCmPerSec;
+
+                if (unstable)
+                {
+                    showDot = true;
+                    color = m_GuidanceBadColor;
+                    text = "Keep syringe steady";
+                }
+                else if (flowDelta < -0.25f)
+                {
+                    showArrow = true;
+                    arrowDir = data.tipDirection;
+                    text = "Close thumb faster";
+                }
+                else if (flowDelta > 0.25f)
+                {
+                    showArrow = true;
+                    arrowDir = -data.tipDirection;
+                    text = "Ease thumb pressure";
+                }
+                else
+                {
+                    showArrow = true;
+                    arrowDir = data.tipDirection;
+                    color = m_GuidanceGoodColor;
+                    text = "Maintain flow";
+                }
+
+                text += " (" + (m_Tutorial.plungerTravelNormalized * 100f).ToString("F0") + "%)";
+            }
             else if (m_GuidanceStep == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate)
             {
                 if (!m_Tutorial.isDispensePhase)
                 {
-                    var needDepth = m_Tutorial.currentInsertionDepthCm < m_Tutorial.minInsertionDepthCm;
+                    var needDepth = m_Tutorial.currentInsertionDepthCm < m_Tutorial.effectiveInsertionDepthTargetCm * 0.85f;
                     var unstable = m_Tutorial.currentLateralStabilityCmPerSec > m_Tutorial.maxLateralStabilityCmPerSec;
 
                     if (needDepth)
                     {
                         showArrow = true;
                         arrowDir = -data.planeNormal;
-                        text = "Insert deeper";
+                        text = "Insert toward center";
                     }
                     else if (unstable)
                     {
                         showArrow = true;
-                        // Stabilize cue: small opposite arrow along lateral projection to visibly request less lateral motion.
                         arrowDir = -Vector3.ProjectOnPlane(data.tipDirection, data.planeNormal);
                         if (arrowDir.sqrMagnitude < 0.000001f)
                             arrowDir = data.planeNormal;
                         text = "Steady hand";
-                    }
-                    else if (m_Tutorial.hasCompletedInsertionDepth)
-                    {
-                        showArrow = true;
-                        arrowDir = data.tipDirection;
-                        text = "Press plunger";
                     }
                     else
                     {
                         showArrow = true;
                         arrowDir = -data.planeNormal;
                         color = m_GuidanceGoodColor;
-                        text = "Advance insertion";
+                        text = "Hold or dispense";
                     }
                 }
                 else
                 {
-                    var flowDelta = m_Tutorial.currentPlungerPushRateCmPerSec - m_Tutorial.targetDispensePlungerRateCmPerSec;
+                    var flowDelta = m_Tutorial.flowRateMlPerSec - m_Tutorial.targetFlowRateMlPerSec;
                     var unstable = m_Tutorial.currentLateralStabilityCmPerSec > m_Tutorial.maxLateralStabilityCmPerSec;
 
                     if (unstable)
@@ -498,24 +635,24 @@ namespace UnityEngine.XR.Templates.MR
                         color = m_GuidanceBadColor;
                         text = "Keep syringe steady";
                     }
-                    else if (flowDelta < -0.8f)
+                    else if (flowDelta < -0.25f)
                     {
                         showArrow = true;
                         arrowDir = data.tipDirection;
-                        text = "Push plunger faster";
+                        text = "Close thumb faster";
                     }
-                    else if (flowDelta > 0.8f)
+                    else if (flowDelta > 0.25f)
                     {
                         showArrow = true;
                         arrowDir = -data.tipDirection;
-                        text = "Push plunger slower";
+                        text = "Ease thumb pressure";
                     }
                     else
                     {
                         showArrow = true;
                         arrowDir = data.tipDirection;
                         color = m_GuidanceGoodColor;
-                        text = "Maintain dispense";
+                        text = "Maintain flow";
                     }
 
                     text += " (" + (m_Tutorial.plungerTravelNormalized * 100f).ToString("F0") + "%)";
@@ -585,6 +722,9 @@ namespace UnityEngine.XR.Templates.MR
             if (m_DropLine != null)
                 m_DropLine.enabled = visible && m_DropLine.enabled;
 
+            if (m_ThumbToCenterLine != null)
+                m_ThumbToCenterLine.enabled = visible && m_ThumbToCenterLine.enabled;
+
             if (m_PlaneReferenceLine != null)
                 m_PlaneReferenceLine.enabled = visible && m_PlaneReferenceLine.enabled;
 
@@ -616,6 +756,7 @@ namespace UnityEngine.XR.Templates.MR
             m_RuntimeGuidanceMaterial = CreateRuntimeMaterial();
 
             m_DropLine = CreateLine("Needle To Surface", m_RuntimeLineMaterial);
+            m_ThumbToCenterLine = CreateLine("Thumb To Center", m_RuntimeLineMaterial);
             m_PlaneReferenceLine = CreateLine("Surface Direction Reference", m_RuntimeLineMaterial);
             m_ArcLine = CreateLine("Syringe Angle Arc", m_RuntimeLineMaterial);
             m_ArcLine.numCornerVertices = 3;
