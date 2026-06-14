@@ -1428,14 +1428,18 @@ namespace UnityEngine.XR.Templates.MR
             SyncTutorialToUI(force: true);
         }
 
-        // Repurposed (pinch placement dropped): drops/re-centers the injection target at the center
-        // of the field of view, facing the user.
+        // Pinch 3-point surface creation; toggles selection on/off. The placed surface is then
+        // movable via its height handle (ProcessHeightHandleDrag in SurfaceSelectionTool).
         void OnCreateSurfaceButtonClicked()
         {
             if (m_SurfaceSelectionTool == null)
                 return;
 
-            m_SurfaceSelectionTool.RecenterToView();
+            if (m_SurfaceSelectionTool.isSelectingSurface)
+                m_SurfaceSelectionTool.CancelSurfaceSelection();
+            else
+                m_SurfaceSelectionTool.BeginSurfaceSelection();
+
             RefreshActionButtons(force: true);
         }
 
@@ -1641,19 +1645,14 @@ namespace UnityEngine.XR.Templates.MR
             Set(m_SyringeOverlayToggleButtonObject, syringeRelatedStep);
             Set(m_SkeletonToggleButtonObject, syringeRelatedStep);
 
-            // Repurposed buttons (run after the switch so they override the per-case Set calls):
-            //  - "Calibrate" -> Lock-Mode toggle: only on the snap steps where the center-lock runs.
-            //  - "Create Surface" -> Recenter target: wherever a target is in play.
+            // "Calibrate" button is repurposed as the Lock-Mode toggle (runs after the switch so it
+            // overrides the per-case Set): show only on the snap steps where the center-lock runs.
+            // The Create Surface button keeps its original per-step visibility from the switch above.
             var lockStep =
                 step == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle ||
                 step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate ||
                 step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed;
             Set(m_CalibrateButtonObject, lockStep);
-
-            var targetStep = lockStep ||
-                step == SyringeCalibrationButtonBridge.TutorialStep.InjectionType ||
-                step == SyringeCalibrationButtonBridge.TutorialStep.FillSyringe;
-            Set(m_CreateSurfaceButtonObject, targetStep);
         }
 
         /// <summary>
@@ -1830,9 +1829,16 @@ namespace UnityEngine.XR.Templates.MR
         // Repurposed as the recenter-target button.
         string BuildCreateSurfaceButtonLabel()
         {
-            return m_SurfaceSelectionTool != null && m_SurfaceSelectionTool.hasPlacedSurface
-                ? "Recenter Target"
-                : "Place Target";
+            if (m_SurfaceSelectionTool == null)
+                return m_CreateSurfaceIdleLabel;
+
+            if (m_SurfaceSelectionTool.isSelectingSurface)
+                return m_CreateSurfaceSelectingLabel;
+
+            if (m_SurfaceSelectionTool.hasPlacedSurface)
+                return m_CreateSurfacePlacedLabel;
+
+            return m_CreateSurfaceIdleLabel;
         }
 
         string BuildSkeletonToggleButtonLabel()

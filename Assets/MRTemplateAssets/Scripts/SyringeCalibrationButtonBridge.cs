@@ -1320,16 +1320,6 @@ namespace UnityEngine.XR.Templates.MR
             if (m_Tracker != null && !snapStep)
                 m_Tracker.SetInjectionSnapTarget(Vector3.zero, Vector3.up, 0f, false);
 
-            // View-placed target: as soon as the user reaches injection-type selection, drop the guide
-            // at the center of the field of view (facing them) so the example shows in front. Replaces
-            // the old pinch workflow; the Recenter button re-drops it later.
-            var needsTarget = nextStep == TutorialStep.InjectionType ||
-                              nextStep == TutorialStep.InjectionAngle ||
-                              nextStep == TutorialStep.InsertionSpeedFlowRate ||
-                              nextStep == TutorialStep.RemoveSpeed;
-            if (needsTarget && m_SurfaceSelectionTool != null && !m_SurfaceSelectionTool.hasPlacedSurface)
-                m_SurfaceSelectionTool.RecenterToView();
-
             if (nextStep == TutorialStep.InjectionAngle)
                 m_AngleHoldProgress = 0f;
 
