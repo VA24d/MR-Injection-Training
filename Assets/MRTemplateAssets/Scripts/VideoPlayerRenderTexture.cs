@@ -42,6 +42,9 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField, Tooltip("The bit depth of the depth channel for the RenderTexture which will be created.")]
         int m_RenderTextureDepth;
 
+        [SerializeField, Tooltip("How the video fills the render texture. Stretch covers the whole display (no letterbox); FitOutside fills without distortion (crops overflow).")]
+        VideoAspectRatio m_AspectRatio = VideoAspectRatio.Stretch;
+
         void Start()
         {
             k_ShaderName = GetShaderName();
@@ -50,7 +53,11 @@ namespace UnityEngine.XR.Templates.MR
             renderTexture.Create();
             var material = new Material(Shader.Find(k_ShaderName));
             material.mainTexture = renderTexture;
-            GetComponent<VideoPlayer>().targetTexture = renderTexture;
+            var videoPlayer = GetComponent<VideoPlayer>();
+            videoPlayer.targetTexture = renderTexture;
+            // Fill the render texture so the video covers the whole display quad (was FitHorizontally,
+            // which letterboxes when the clip aspect differs from the 16:9 texture).
+            videoPlayer.aspectRatio = m_AspectRatio;
             m_Renderer.material = material;
         }
     }

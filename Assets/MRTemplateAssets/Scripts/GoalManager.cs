@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using TMPro;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
+using UnityEngine.Video;
 using UnityEngine.XR.Interaction.Toolkit.Samples.StarterAssets;
 using LazyFollow = UnityEngine.XR.Interaction.Toolkit.UI.LazyFollow;
 
@@ -59,6 +60,33 @@ namespace UnityEngine.XR.Templates.MR
 
         [SerializeField]
         Toggle m_VideoPlayerToggle;
+
+        [Header("Demo video (per injection type)")]
+        [SerializeField, Tooltip("Played when the selected injection type is Intramuscular. Leave empty to use the default clip.")]
+        VideoClip m_VideoIntramuscular;
+
+        [SerializeField, Tooltip("Played for Subcutaneous. Leave empty to use the default clip.")]
+        VideoClip m_VideoSubcutaneous;
+
+        [SerializeField, Tooltip("Played for Intradermal. Leave empty to use the default clip.")]
+        VideoClip m_VideoIntradermal;
+
+        [SerializeField, Tooltip("Played for Intravenous. Leave empty to use the default clip.")]
+        VideoClip m_VideoIntravenous;
+
+        [SerializeField, Tooltip("Fallback demo clip used when the selected type has no clip assigned. If empty, the clip already on the VideoPlayer is kept.")]
+        VideoClip m_VideoDefault;
+
+        [SerializeField, Tooltip("Pin the demo video panel beside the coaching UI panel (instead of floating in front of the head).")]
+        bool m_PinVideoBesidePanel = true;
+
+        [SerializeField, Tooltip("Sideways offset (m) of the demo video from the coaching panel. Positive = panel's right.")]
+        float m_VideoBesidePanelMeters = 0.72f;
+
+        [SerializeField, Tooltip("Extra yaw (deg) applied to the video so its display faces the user. Flip to 0 if the video shows its back.")]
+        float m_VideoYawOffset = 180f;
+
+        VideoPlayer m_DemoVideoPlayerComponent;
 
         // Retained to preserve prefab/scene serialization compatibility.
         [SerializeField]
@@ -2452,7 +2480,36 @@ namespace UnityEngine.XR.Templates.MR
             if (m_VideoPlayer == null || m_VideoPlayer.activeSelf)
                 return;
 
+            // Play the clip for the currently selected injection type.
+            ApplyDemoVideoClipForType();
+
+            var panel = ResolveCoachingPanelTransform();
             var follow = m_VideoPlayer.GetComponent<LazyFollow>();
+
+            if (m_PinVideoBesidePanel && panel != null)
+            {
+                // Pin beside the coaching UI panel and move with it. Preserve the video's world size
+                // by compensating for the panel's scale after parenting.
+                if (follow != null)
+                    follow.enabled = false;
+
+                var worldScale = m_VideoPlayer.transform.lossyScale;
+                m_VideoPlayer.transform.SetParent(panel, worldPositionStays: true);
+                m_VideoPlayer.transform.position = panel.position + panel.right * m_VideoBesidePanelMeters;
+                m_VideoPlayer.transform.rotation = panel.rotation * Quaternion.Euler(0f, m_VideoYawOffset, 0f);
+
+                var parentScale = panel.lossyScale;
+                m_VideoPlayer.transform.localScale = new Vector3(
+                    worldScale.x / Mathf.Max(1e-4f, parentScale.x),
+                    worldScale.y / Mathf.Max(1e-4f, parentScale.y),
+                    worldScale.z / Mathf.Max(1e-4f, parentScale.z));
+
+                m_VideoPlayer.SetActive(true);
+                RestartDemoVideo();
+                return;
+            }
+
+            // Fallback: float it in front of the head (no coaching panel available).
             if (follow != null)
                 follow.rotationFollowMode = LazyFollow.RotationFollowMode.None;
 
@@ -2460,6 +2517,7 @@ namespace UnityEngine.XR.Templates.MR
             if (target == null)
             {
                 m_VideoPlayer.SetActive(true);
+                RestartDemoVideo();
                 return;
             }
 
@@ -2486,6 +2544,63 @@ namespace UnityEngine.XR.Templates.MR
 
             if (follow != null)
                 follow.rotationFollowMode = LazyFollow.RotationFollowMode.LookAtWithWorldUp;
+            RestartDemoVideo();
+        }
+
+        Transform ResolveCoachingPanelTransform()
+        {
+            if (m_GoalPanelLazyFollow != null)
+                return m_GoalPanelLazyFollow.transform;
+            if (m_CoachingUIParent != null)
+                return m_CoachingUIParent.transform;
+            return null;
+        }
+
+        VideoPlayer ResolveDemoVideoPlayer()
+        {
+            if (m_DemoVideoPlayerComponent == null && m_VideoPlayer != null)
+                m_DemoVideoPlayerComponent = m_VideoPlayer.GetComponentInChildren<VideoPlayer>(true);
+            return m_DemoVideoPlayerComponent;
+        }
+
+        // Selects the demo clip for the current injection type, falling back to the default clip (or
+        // the clip already on the VideoPlayer when nothing is assigned).
+        void ApplyDemoVideoClipForType()
+        {
+            var vp = ResolveDemoVideoPlayer();
+            if (vp == null)
+                return;
+
+            var type = m_InjectionTutorial != null
+                ? m_InjectionTutorial.selectedInjectionType
+                : SyringeCalibrationButtonBridge.InjectionType.None;
+
+            var clip = type switch
+            {
+                SyringeCalibrationButtonBridge.InjectionType.Intramuscular => m_VideoIntramuscular,
+                SyringeCalibrationButtonBridge.InjectionType.Subcutaneous => m_VideoSubcutaneous,
+                SyringeCalibrationButtonBridge.InjectionType.Intradermal => m_VideoIntradermal,
+                SyringeCalibrationButtonBridge.InjectionType.Intravenous => m_VideoIntravenous,
+                _ => null,
+            };
+
+            if (clip == null)
+                clip = m_VideoDefault;
+
+            if (clip != null && vp.clip != clip)
+            {
+                vp.source = VideoSource.VideoClip;
+                vp.clip = clip;
+            }
+        }
+
+        void RestartDemoVideo()
+        {
+            var vp = ResolveDemoVideoPlayer();
+            if (vp == null)
+                return;
+            vp.Stop();
+            vp.Play();
         }
 
         // Legacy names kept to avoid broken serialized callbacks.
