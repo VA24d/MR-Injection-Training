@@ -81,7 +81,7 @@ namespace UnityEngine.XR.Templates.MR
         bool m_PinVideoBesidePanel = true;
 
         [SerializeField, Tooltip("Sideways offset (m) of the demo video from the coaching panel. Positive = panel's right.")]
-        float m_VideoBesidePanelMeters = 0.72f;
+        float m_VideoBesidePanelMeters = 1.05f;
 
         [SerializeField, Tooltip("Extra yaw (deg) applied to the video so its display faces the user. Flip to 0 if the video shows its back.")]
         float m_VideoYawOffset = 180f;
@@ -1626,7 +1626,7 @@ namespace UnityEngine.XR.Templates.MR
                     Set(m_CreateSurfaceButtonObject, false);
                     Set(m_SkeletonToggleButtonObject, true);
                     Set(m_PreviousStepButtonObject, true);
-                    Set(m_NextStepButtonObject, false);
+                    Set(m_NextStepButtonObject, true); // manual advance; auto-advance still runs
                     Set(m_SwapHandsButtonObject, false);
                     Set(m_InjectionTypeButtonObject, false);
                     Set(m_DemoVideoButtonObject, false);
@@ -2411,12 +2411,8 @@ namespace UnityEngine.XR.Templates.MR
             if (m_InjectionTutorial.currentStep == SyringeCalibrationButtonBridge.TutorialStep.CleanSurfaceAlcohol)
                 m_InjectionTutorial.MarkSurfaceCleanCompleted();
 
-            var step = m_InjectionTutorial.currentStep;
-            if (step == SyringeCalibrationButtonBridge.TutorialStep.FlowRate ||
-                step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate ||
-                step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed)
-                return;
-
+            // FlowRate/RemoveSpeed auto-advance from hand motion, but also allow the Next button to
+            // advance them manually (AdvanceStep now routes them forward) so the user is never stuck.
             m_InjectionTutorial.AdvanceStep();
             SyncTutorialToUI(force: true);
         }

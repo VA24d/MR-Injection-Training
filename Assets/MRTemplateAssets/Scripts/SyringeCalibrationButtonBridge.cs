@@ -299,6 +299,10 @@ namespace UnityEngine.XR.Templates.MR
         [Tooltip("How quickly displayed lateral speed follows measured lateral speed (higher = snappier).")]
         float m_RemovalLateralSmoothing = 8f;
 
+        [SerializeField, Min(0.5f)]
+        [Tooltip("Low-pass rate for the displayed insertion speed and flow rate (higher = snappier, lower = smoother).")]
+        float m_SpeedDisplaySmoothing = 6f;
+
         [SerializeField, Min(0f)]
         [Tooltip("Depth threshold in cm considered fully removed from the surface during removal step.")]
         float m_RemovalCompleteDepthCm = 0.02f;
@@ -390,6 +394,8 @@ namespace UnityEngine.XR.Templates.MR
         Vector3 m_PreviousNeedleTip;
         Vector3 m_PlungerWorldPrev;
         bool m_HasPreviousNeedleTip;
+        float m_PreviousInsertionDepthCm;
+        bool m_HasPreviousInsertionDepth;
         float m_InsertionStableHoldProgress;
         float m_InitialPlungerToWingsDistanceCm;
         bool m_HasInitialPlungerDistance;
@@ -681,8 +687,12 @@ namespace UnityEngine.XR.Templates.MR
                     break;
                 case TutorialStep.FlowRate:
                 case TutorialStep.InsertionSpeedFlowRate:
+                    // Auto-advance from the dispense detection, or manually via the Next button.
+                    GoToStep(TutorialStep.RemoveSpeed);
+                    break;
                 case TutorialStep.RemoveSpeed:
-                    // Flow/removal auto-advance from hand motion only.
+                    // Auto-advance from withdrawal, or manually via the Next button.
+                    GoToStep(TutorialStep.FinalScore);
                     break;
                 case TutorialStep.FinalScore:
                     break;
@@ -1181,8 +1191,10 @@ namespace UnityEngine.XR.Templates.MR
                     var axialCmPerSec = Vector3.Dot(needleVelocity, inwardAxis) * 100f;
                     var lateralCmPerSec = Vector3.ProjectOnPlane(needleVelocity, inwardAxis).magnitude * 100f;
 
+                    // Keep the raw axial/lateral world-velocity for the stability readout, but the
+                    // displayed insertion speed is derived from the tracked depth below (the lateral
+                    // center-snap pollutes world velocity and can read ~0).
                     m_CurrentAxialNeedleSpeedCmPerSec = axialCmPerSec;
-                    m_InsertionSpeedCmPerSec = Mathf.Max(0f, axialCmPerSec);
                     m_CurrentLateralStabilityCmPerSec = lateralCmPerSec;
                 }
 
@@ -1234,8 +1246,12 @@ namespace UnityEngine.XR.Templates.MR
                 m_HasInitialPlungerDistance = true;
             }
 
+            // Once inserted at the site (latched on entering Insertion), keep reading the dispense
+            // rate even if the per-frame thumb-engagement flag flickers — otherwise flow rate stays 0
+            // and the dispense detection that advances the step never fires.
             var thumbMetricsActive = IsInsertionPipelineStep(m_CurrentStep) &&
-                (IsThumbEngagedAtSite() || (m_Tracker != null && m_Tracker.isNearInjectionSite));
+                (m_HasLatchedNearSiteEngagement || IsThumbEngagedAtSite() ||
+                 (m_Tracker != null && m_Tracker.isNearInjectionSite));
             if (thumbMetricsActive && m_Tracker != null)
             {
                 m_ThumbTowardKnucklesRateCmPerSec = m_Tracker.rawThumbTowardKnucklesRateCmPerSec;
@@ -1251,7 +1267,26 @@ namespace UnityEngine.XR.Templates.MR
             {
                 var travelCm = Mathf.Max(0f, m_InitialPlungerToWingsDistanceCm - plungerToWingsCm);
                 m_PlungerTravelNormalized = Mathf.Clamp01(travelCm / Mathf.Max(0.01f, m_MinPlungerTravelToCompleteCm));
-                m_FlowRateMlPerSec = Mathf.Clamp(m_ThumbTowardKnucklesRateCmPerSec * 0.38f, 0f, 2.5f);
+                var rawFlow = Mathf.Clamp(m_ThumbTowardKnucklesRateCmPerSec * 0.38f, 0f, 2.5f);
+                m_FlowRateMlPerSec = Mathf.Lerp(m_FlowRateMlPerSec, rawFlow, Mathf.Clamp01(m_SpeedDisplaySmoothing * dt));
+            }
+
+            // Displayed insertion speed = low-passed rate of change of the tracked insertion depth.
+            // Depth runs along the injection axis (and uses the snap-immune thumb-plane approach when
+            // inserted), so this registers the real push and is not polluted by the lateral snap.
+            if (IsInsertionPipelineStep(m_CurrentStep) && hasSurface)
+            {
+                if (m_HasPreviousInsertionDepth)
+                {
+                    var rawInsertionSpeed = Mathf.Max(0f, (m_CurrentInsertionDepthCm - m_PreviousInsertionDepthCm) / dt);
+                    m_InsertionSpeedCmPerSec = Mathf.Lerp(m_InsertionSpeedCmPerSec, rawInsertionSpeed, Mathf.Clamp01(m_SpeedDisplaySmoothing * dt));
+                }
+                m_PreviousInsertionDepthCm = m_CurrentInsertionDepthCm;
+                m_HasPreviousInsertionDepth = true;
+            }
+            else
+            {
+                m_HasPreviousInsertionDepth = false;
             }
 
             m_PreviousNeedleTip = pose.needleTip;
