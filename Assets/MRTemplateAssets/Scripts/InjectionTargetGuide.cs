@@ -212,22 +212,19 @@ namespace UnityEngine.XR.Templates.MR
                                step == SyringeCalibrationButtonBridge.TutorialStep.InsertionSpeedFlowRate ||
                                step == SyringeCalibrationButtonBridge.TutorialStep.RemoveSpeed;
 
-            // Spot disc shrinks as the thumb nears the surface center — only meaningful once engaged.
+            // Spot disc shrinks as the NEEDLE TIP nears the surface (full size far away -> min size at
+            // contact), so the target reads as a smaller, more precise point the closer you get.
             float diameter;
-            if (previewMode)
+            if (previewMode || !hasPose)
             {
                 diameter = m_SpotMaxDiameter;
-            }
-            else if (thumbEngaged || nearSite)
-            {
-                var thumbDistance = Mathf.Abs(Vector3.Dot(m_Tracker.rawThumbTip - spot, normal));
-                diameter = Mathf.Lerp(m_SpotMinDiameter, m_SpotMaxDiameter,
-                    Mathf.Clamp01(thumbDistance / Mathf.Max(0.001f, m_SpotShrinkRangeMeters)));
-                diameter = Mathf.Max(diameter, m_SpotMinDiameter);
             }
             else
             {
-                diameter = m_SpotMaxDiameter;
+                var needleDistance = Mathf.Abs(Vector3.Dot(syringe.needleTip - spot, normal));
+                diameter = Mathf.Lerp(m_SpotMinDiameter, m_SpotMaxDiameter,
+                    Mathf.Clamp01(needleDistance / Mathf.Max(0.001f, m_SpotShrinkRangeMeters)));
+                diameter = Mathf.Max(diameter, m_SpotMinDiameter);
             }
             PlaceDisc(m_Spot, spot + normal * 0.001f, normal, diameter * 0.5f);
 

@@ -146,6 +146,36 @@ namespace UnityEngine.XR.Templates.MR
         [Tooltip("Fixed plunger-to-wings span (m) used in thumb-to-center mode.")]
         float m_FixedPlungerToWings = 0.032f;
 
+        [Header("Tracking glitch rejection")]
+        [SerializeField, Min(0.5f)]
+        [Tooltip("Max plausible hand speed (m/s). A single-frame jump faster than this is treated as a tracking glitch and the previous pose is held instead of jumping.")]
+        float m_MaxTrackingSpeedMps = 4f;
+
+        [SerializeField, Min(1)]
+        [Tooltip("After this many consecutive rejected (glitch) frames, accept the new pose anyway so a genuine fast move / re-acquire is not frozen forever.")]
+        int m_MaxConsecutiveRejects = 8;
+
+        [Header("Wrist entry-hole latch")]
+        [SerializeField]
+        [Tooltip("Once the wrist is close to the site and the needle reaches the surface, latch the entry hole at the site center and hold it there through the insertion (hysteresis release). Keeps the entry from wandering/flickering when tracking is noisy.")]
+        bool m_UseWristEntryLatch = true;
+
+        [SerializeField, Min(0.02f)]
+        [Tooltip("Wrist within this lateral distance (m) of the site center can latch the entry hole.")]
+        float m_WristLatchRadius = 0.13f;
+
+        [SerializeField, Min(0.02f)]
+        [Tooltip("Wrist within this distance (m) of the surface plane can latch the entry hole.")]
+        float m_WristLatchPlaneDistance = 0.15f;
+
+        [SerializeField, Min(0.005f)]
+        [Tooltip("Needle tip within this distance (m) of the surface = insertion starting; required (with wrist near) to latch.")]
+        float m_EntryLatchTipDistance = 0.035f;
+
+        [SerializeField, Min(0.01f)]
+        [Tooltip("Hysteresis: release the latch only once the wrist moves past radius/plane + this margin (m).")]
+        float m_WristLatchReleaseMargin = 0.05f;
+
         [Header("Marker calibration")]
         [SerializeField]
         bool m_EnableMarkerAssist = false;
@@ -373,10 +403,14 @@ namespace UnityEngine.XR.Templates.MR
         Vector3 m_ThumbToCenterAxis = Vector3.forward;
         Vector3 m_RawThumbTip;
         Vector3 m_RawWingsCenter;
+        Vector3 m_RawWristPos;
+        bool m_HasRawWrist;
         Vector3 m_PreviousRawThumbTip;
         bool m_HasPreviousRawThumbTip;
         float m_RawThumbTowardKnucklesRateCmPerSec;
         bool m_IsNearInjectionSite;
+        bool m_EntryHoleLatched;
+        int m_ConsecutiveRejects;
         Vector3 m_SmoothedThumb;
         bool m_HasSmoothedThumb;
 
@@ -508,23 +542,40 @@ namespace UnityEngine.XR.Templates.MR
             {
                 m_SmoothedPoints = points;
                 m_HasSmoothedPose = true;
+                m_ConsecutiveRejects = 0;
+                UpdateRawThumbMetrics(points);
+                ApplyThumbToCenterProximityDraw();
             }
             else
             {
-                var t = 1f - Mathf.Pow(1f - m_PositionSmoothing, Time.deltaTime * 90f);
-                SmoothTo(ref m_SmoothedPoints.plunger, points.plunger, t);
-                SmoothTo(ref m_SmoothedPoints.leftWing, points.leftWing, t);
-                SmoothTo(ref m_SmoothedPoints.rightWing, points.rightWing, t);
-                SmoothTo(ref m_SmoothedPoints.wingsCenter, points.wingsCenter, t);
-                SmoothTo(ref m_SmoothedPoints.barrelEnd, points.barrelEnd, t);
-                SmoothTo(ref m_SmoothedPoints.needleBase, points.needleBase, t);
-                SmoothTo(ref m_SmoothedPoints.needleTip, points.needleTip, t);
+                // Reject teleport-like single-frame jumps (tracking glitches): hold the last good
+                // pose instead of letting the syringe snap across the room. After a run of rejects,
+                // accept anyway so a genuine fast move / re-acquire is not frozen forever.
+                var jump = Vector3.Distance(points.wingsCenter, m_SmoothedPoints.wingsCenter);
+                var maxJump = m_MaxTrackingSpeedMps * Mathf.Max(Time.deltaTime, 0.0001f);
+                if (jump > maxJump && m_ConsecutiveRejects < m_MaxConsecutiveRejects)
+                {
+                    m_ConsecutiveRejects++;
+                    // Hold pose: skip smoothing toward the glitch and skip the near-site redraw.
+                }
+                else
+                {
+                    m_ConsecutiveRejects = 0;
+                    var t = 1f - Mathf.Pow(1f - m_PositionSmoothing, Time.deltaTime * 90f);
+                    SmoothTo(ref m_SmoothedPoints.plunger, points.plunger, t);
+                    SmoothTo(ref m_SmoothedPoints.leftWing, points.leftWing, t);
+                    SmoothTo(ref m_SmoothedPoints.rightWing, points.rightWing, t);
+                    SmoothTo(ref m_SmoothedPoints.wingsCenter, points.wingsCenter, t);
+                    SmoothTo(ref m_SmoothedPoints.barrelEnd, points.barrelEnd, t);
+                    SmoothTo(ref m_SmoothedPoints.needleBase, points.needleBase, t);
+                    SmoothTo(ref m_SmoothedPoints.needleTip, points.needleTip, t);
+
+                    UpdateRawThumbMetrics(points);
+
+                    // Near the site: thumb-to-center fixed-length syringe; otherwise legacy center-lock.
+                    ApplyThumbToCenterProximityDraw();
+                }
             }
-
-            UpdateRawThumbMetrics(points);
-
-            // Near the site: thumb-to-center fixed-length syringe; otherwise legacy center-lock.
-            ApplyThumbToCenterProximityDraw();
 
             if (m_OverlayVisualsEnabled)
             {
@@ -587,6 +638,7 @@ namespace UnityEngine.XR.Templates.MR
                 m_HasLockedDir = false;
                 m_ThumbToCenterActive = false;
                 m_HasSmoothedThumb = false;
+                m_EntryHoleLatched = false;
             }
         }
 
@@ -639,6 +691,7 @@ namespace UnityEngine.XR.Templates.MR
                 m_CenterLockEngaged = false;
                 m_HasLockedDir = false;
                 m_HasSmoothedThumb = false;
+                m_EntryHoleLatched = false;
                 return;
             }
 
@@ -653,8 +706,33 @@ namespace UnityEngine.XR.Templates.MR
             var thumbPlaneDist = Mathf.Abs(plane.GetDistanceToPoint(thumb));
             var lateralDist = Vector3.ProjectOnPlane(thumb - m_SnapCenter, m_SnapNormal).magnitude;
 
-            var engage = thumbPlaneDist <= m_ProximityPlaneDistance &&
-                         lateralDist <= m_SnapRadius;
+            // Wrist entry-hole latch: the wrist is far less occluded than the thumb, so use it to
+            // hold the thumb-to-center draw engaged once insertion starts. Without this the thumb
+            // proximity flickers out, falls back to the lateral-snap center-lock, and the syringe
+            // visibly jumps. Latch on (wrist near + needle reaching the surface), release with
+            // hysteresis once the wrist clearly leaves.
+            if (m_UseWristEntryLatch && m_HasRawWrist)
+            {
+                var wristPlaneDist = Mathf.Abs(plane.GetDistanceToPoint(m_RawWristPos));
+                var wristLateral = Vector3.ProjectOnPlane(m_RawWristPos - m_SnapCenter, m_SnapNormal).magnitude;
+                var tipPlaneDist = Mathf.Abs(plane.GetDistanceToPoint(m_SmoothedPoints.needleTip));
+                var wristNear = wristPlaneDist <= m_WristLatchPlaneDistance && wristLateral <= m_WristLatchRadius;
+                var wristFar = wristPlaneDist > m_WristLatchPlaneDistance + m_WristLatchReleaseMargin ||
+                               wristLateral > m_WristLatchRadius + m_WristLatchReleaseMargin;
+
+                if (!m_EntryHoleLatched && wristNear && tipPlaneDist <= m_EntryLatchTipDistance)
+                    m_EntryHoleLatched = true;
+                else if (m_EntryHoleLatched && wristFar)
+                    m_EntryHoleLatched = false;
+            }
+            else
+            {
+                m_EntryHoleLatched = false;
+            }
+
+            var engage = m_EntryHoleLatched ||
+                         (thumbPlaneDist <= m_ProximityPlaneDistance &&
+                          lateralDist <= m_SnapRadius);
 
             if (!engage)
             {
@@ -998,7 +1076,15 @@ namespace UnityEngine.XR.Templates.MR
             // fingers curl, so it anchors the syringe direction sign and prevents 180-degree flips.
             var handOut = axisVector;
             if (TryGetJointPose(leftHand, XRHandJointID.Wrist, out var wristPose))
+            {
                 handOut = middleWingRaw - wristPose.position;
+                m_RawWristPos = wristPose.position;
+                m_HasRawWrist = true;
+            }
+            else
+            {
+                m_HasRawWrist = false;
+            }
 
             var axis = GetStabilizedDirection(leftHand, axisFromContacts, indexWingRaw, middleWingRaw, handOut);
 
