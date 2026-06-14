@@ -80,11 +80,17 @@ namespace UnityEngine.XR.Templates.MR
         [SerializeField, Tooltip("Pin the demo video panel beside the coaching UI panel (instead of floating in front of the head).")]
         bool m_PinVideoBesidePanel = true;
 
-        [SerializeField, Tooltip("Sideways offset (m) of the demo video from the coaching panel. Positive = panel's right.")]
+        [SerializeField, Tooltip("Fallback sideways offset (m) from the panel, used only when the panel size can't be measured. Positive = panel's right.")]
         float m_VideoBesidePanelMeters = 1.05f;
 
-        [SerializeField, Tooltip("Extra yaw (deg) applied to the video so its display faces the user. Flip to 0 if the video shows its back.")]
-        float m_VideoYawOffset = 180f;
+        [SerializeField, Tooltip("Extra yaw (deg) applied to the video so its display faces the user. Set 0 if it shows mirrored/inverted; 180 if it shows its back.")]
+        float m_VideoYawOffset = 0f;
+
+        [SerializeField, Tooltip("Video height as a multiple of the measured coaching-panel height. 1 = same height as the panel.")]
+        float m_VideoSizeMultiplier = 1f;
+
+        [SerializeField, Tooltip("Gap (m) between the right edge of the coaching panel and the left edge of the video.")]
+        float m_VideoGapMeters = 0.04f;
 
         VideoPlayer m_DemoVideoPlayerComponent;
 
@@ -2484,24 +2490,43 @@ namespace UnityEngine.XR.Templates.MR
 
             if (m_PinVideoBesidePanel && panel != null)
             {
-                // Pin beside the coaching UI panel and move with it. Preserve the video's world size
-                // by compensating for the panel's scale after parenting.
+                // Pin beside the coaching UI panel, matched to its height and vertically centered, and
+                // move with it. Measure the panel before the video becomes its child.
                 if (follow != null)
                     follow.enabled = false;
 
-                var worldScale = m_VideoPlayer.transform.lossyScale;
-                m_VideoPlayer.transform.SetParent(panel, worldPositionStays: true);
-                m_VideoPlayer.transform.position = panel.position + panel.right * m_VideoBesidePanelMeters;
-                m_VideoPlayer.transform.rotation = panel.rotation * Quaternion.Euler(0f, m_VideoYawOffset, 0f);
-
-                var parentScale = panel.lossyScale;
-                m_VideoPlayer.transform.localScale = new Vector3(
-                    worldScale.x / Mathf.Max(1e-4f, parentScale.x),
-                    worldScale.y / Mathf.Max(1e-4f, parentScale.y),
-                    worldScale.z / Mathf.Max(1e-4f, parentScale.z));
+                bool gotPanel = TryMeasureWorldSize(panel, out var panelH, out var panelW, out var panelC);
 
                 m_VideoPlayer.SetActive(true);
                 RestartDemoVideo();
+
+                bool gotVideo = TryMeasureWorldSize(m_VideoPlayer.transform, out var vidH, out var vidW, out _);
+
+                m_VideoPlayer.transform.SetParent(panel, worldPositionStays: true);
+                m_VideoPlayer.transform.rotation = panel.rotation * Quaternion.Euler(0f, m_VideoYawOffset, 0f);
+
+                if (gotPanel && gotVideo && vidH > 1e-4f)
+                {
+                    // Scale the video so its height matches the panel (× multiplier).
+                    float factor = Mathf.Max(0.01f, (panelH * m_VideoSizeMultiplier) / vidH);
+                    m_VideoPlayer.transform.localScale *= factor;
+
+                    // Sit it just to the panel's right with a small gap, centered on the panel's center.
+                    float halfPanel = panelW * 0.5f;
+                    float halfVideo = vidW * factor * 0.5f;
+                    var target = panelC + panel.right * (halfPanel + m_VideoGapMeters + halfVideo);
+
+                    // The quad's pivot may not be its center; place then nudge so the center lands on target.
+                    m_VideoPlayer.transform.position = target;
+                    if (TryMeasureWorldSize(m_VideoPlayer.transform, out _, out _, out var newC))
+                        m_VideoPlayer.transform.position += target - newC;
+                }
+                else
+                {
+                    // Fallback when sizes can't be measured: fixed sideways offset, authored size.
+                    m_VideoPlayer.transform.position = panel.position + panel.right * m_VideoBesidePanelMeters;
+                }
+
                 return;
             }
 
@@ -2550,6 +2575,53 @@ namespace UnityEngine.XR.Templates.MR
             if (m_CoachingUIParent != null)
                 return m_CoachingUIParent.transform;
             return null;
+        }
+
+        // Measures a root's world-space height/width/center, picking the largest contributor among its
+        // child UI RectTransforms (world-space canvases) and mesh Renderers (e.g. the video quad).
+        static bool TryMeasureWorldSize(Transform root, out float height, out float width, out Vector3 center)
+        {
+            height = 0f;
+            width = 0f;
+            center = root != null ? root.position : Vector3.zero;
+            if (root == null)
+                return false;
+
+            bool found = false;
+            float bestArea = 0f;
+            var corners = new Vector3[4];
+
+            foreach (var rect in root.GetComponentsInChildren<RectTransform>(false))
+            {
+                rect.GetWorldCorners(corners);
+                float w = Vector3.Distance(corners[0], corners[3]);
+                float h = Vector3.Distance(corners[0], corners[1]);
+                float area = w * h;
+                if (area > bestArea && w > 1e-4f && h > 1e-4f)
+                {
+                    bestArea = area;
+                    width = w;
+                    height = h;
+                    center = 0.25f * (corners[0] + corners[1] + corners[2] + corners[3]);
+                    found = true;
+                }
+            }
+
+            foreach (var rend in root.GetComponentsInChildren<Renderer>(false))
+            {
+                var b = rend.bounds;
+                float area = b.size.x * b.size.y;
+                if (area > bestArea && b.size.y > 1e-4f)
+                {
+                    bestArea = area;
+                    width = b.size.x;
+                    height = b.size.y;
+                    center = b.center;
+                    found = true;
+                }
+            }
+
+            return found;
         }
 
         VideoPlayer ResolveDemoVideoPlayer()

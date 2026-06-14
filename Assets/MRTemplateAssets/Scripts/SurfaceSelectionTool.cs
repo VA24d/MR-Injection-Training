@@ -111,6 +111,9 @@ namespace UnityEngine.XR.Templates.MR
         bool m_HasSecondPoint;
         bool m_HasPlacedSurface;
         bool m_PinchEngaged;
+        // Once the first point is pinched, lock the remaining points to that same hand so the user
+        // can't accidentally place mixed-hand points. Reset when selection starts/cancels/completes.
+        Handedness m_LockedSelectionHand = Handedness.Invalid;
         bool m_IsDraggingHeightHandle;
         float m_HeightDragStartY;
         float m_HeightDragSurfaceStartY;
@@ -197,6 +200,7 @@ namespace UnityEngine.XR.Templates.MR
         {
             m_IsSelectingSurface = true;
             m_PinchEngaged = false;
+            m_LockedSelectionHand = Handedness.Invalid;
             m_HasFirstPoint = false;
             m_HasSecondPoint = false;
             m_HasPlacedSurface = false;
@@ -221,6 +225,7 @@ namespace UnityEngine.XR.Templates.MR
         {
             m_IsSelectingSurface = false;
             m_PinchEngaged = false;
+            m_LockedSelectionHand = Handedness.Invalid;
             m_HasFirstPoint = false;
             m_HasSecondPoint = false;
             m_IsDraggingHeightHandle = false;
@@ -296,6 +301,7 @@ namespace UnityEngine.XR.Templates.MR
         {
             m_IsSelectingSurface = false;
             m_PinchEngaged = false;
+            m_LockedSelectionHand = Handedness.Invalid;
             m_HasFirstPoint = false;
             m_HasSecondPoint = false;
             m_HasPlacedSurface = false;
@@ -324,7 +330,7 @@ namespace UnityEngine.XR.Templates.MR
 
         void ProcessSelectionStep()
         {
-            if (!TryGetPinchPose(out var pinchPoint, out var pinchDistance))
+            if (!TryGetPinchPose(out var pinchPoint, out var pinchDistance, out var pinchHand))
             {
                 UpdateSelectionPreviewLines(default, hasPinchPose: false);
                 return;
@@ -335,7 +341,7 @@ namespace UnityEngine.XR.Templates.MR
             if (!m_PinchEngaged && pinchDistance <= m_PinchEngageDistance)
             {
                 m_PinchEngaged = true;
-                RegisterPinchPoint(pinchPoint);
+                RegisterPinchPoint(pinchPoint, pinchHand);
             }
             else if (m_PinchEngaged && pinchDistance >= m_PinchReleaseDistance)
             {
@@ -375,10 +381,12 @@ namespace UnityEngine.XR.Templates.MR
             m_SecondSegmentLine.SetPosition(1, secondDynamicEnd);
         }
 
-        void RegisterPinchPoint(Vector3 pinchPoint)
+        void RegisterPinchPoint(Vector3 pinchPoint, Handedness pinchHand)
         {
             if (!m_HasFirstPoint)
             {
+                // Lock subsequent points to whichever hand placed the first point.
+                m_LockedSelectionHand = pinchHand;
                 m_FirstPoint = pinchPoint;
                 m_HasFirstPoint = true;
                 m_HasSecondPoint = false;
@@ -424,6 +432,7 @@ namespace UnityEngine.XR.Templates.MR
             m_IsSelectingSurface = false;
             m_HasFirstPoint = false;
             m_HasSecondPoint = false;
+            m_LockedSelectionHand = Handedness.Invalid;
 
             if (m_ThirdPointDot != null)
             {
@@ -441,25 +450,31 @@ namespace UnityEngine.XR.Templates.MR
             UpdatePlaneFromPoints();
         }
 
-        // Either hand may pinch to place the surface or drag the height handle. Pick the hand that is
-        // pinching most (smallest thumb-index gap) so the syringe hand or the free hand both work.
         bool TryGetPinchPose(out Vector3 pinchPoint, out float pinchDistance)
+            => TryGetPinchPose(out pinchPoint, out pinchDistance, out _);
+
+        // The first point may be pinched with either hand (smallest thumb-index gap wins). Once a hand
+        // is locked (m_LockedSelectionHand), only that hand is evaluated so later points stay on it.
+        bool TryGetPinchPose(out Vector3 pinchPoint, out float pinchDistance, out Handedness pinchHand)
         {
             pinchPoint = default;
             pinchDistance = 0f;
+            pinchHand = Handedness.Invalid;
 
             if (m_HandSubsystem == null || !m_HandSubsystem.running)
                 return false;
 
             var found = false;
             var best = float.MaxValue;
-            EvaluatePinchHand(m_HandSubsystem.rightHand, ref found, ref best, ref pinchPoint, ref pinchDistance);
-            EvaluatePinchHand(m_HandSubsystem.leftHand, ref found, ref best, ref pinchPoint, ref pinchDistance);
+            if (m_LockedSelectionHand != Handedness.Right)
+                EvaluatePinchHand(m_HandSubsystem.leftHand, Handedness.Left, ref found, ref best, ref pinchPoint, ref pinchDistance, ref pinchHand);
+            if (m_LockedSelectionHand != Handedness.Left)
+                EvaluatePinchHand(m_HandSubsystem.rightHand, Handedness.Right, ref found, ref best, ref pinchPoint, ref pinchDistance, ref pinchHand);
             return found;
         }
 
-        static void EvaluatePinchHand(XRHand hand, ref bool found, ref float best,
-            ref Vector3 pinchPoint, ref float pinchDistance)
+        static void EvaluatePinchHand(XRHand hand, Handedness handedness, ref bool found, ref float best,
+            ref Vector3 pinchPoint, ref float pinchDistance, ref Handedness pinchHand)
         {
             if (!hand.isTracked)
                 return;
@@ -473,6 +488,7 @@ namespace UnityEngine.XR.Templates.MR
                 best = d;
                 pinchPoint = 0.5f * (indexTipPose.position + thumbTipPose.position);
                 pinchDistance = d;
+                pinchHand = handedness;
                 found = true;
             }
         }
