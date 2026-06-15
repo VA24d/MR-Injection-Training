@@ -2514,12 +2514,12 @@ namespace UnityEngine.XR.Templates.MR
                     // Sit it just to the panel's right with a small gap, centered on the panel's center.
                     float halfPanel = panelW * 0.5f;
                     float halfVideo = vidW * factor * 0.5f;
-                    var target = panelC + panel.right * (halfPanel + m_VideoGapMeters + halfVideo);
+                    var videoCenterTarget = panelC + panel.right * (halfPanel + m_VideoGapMeters + halfVideo);
 
                     // The quad's pivot may not be its center; place then nudge so the center lands on target.
-                    m_VideoPlayer.transform.position = target;
+                    m_VideoPlayer.transform.position = videoCenterTarget;
                     if (TryMeasureWorldSize(m_VideoPlayer.transform, out _, out _, out var newC))
-                        m_VideoPlayer.transform.position += target - newC;
+                        m_VideoPlayer.transform.position += videoCenterTarget - newC;
                 }
                 else
                 {
