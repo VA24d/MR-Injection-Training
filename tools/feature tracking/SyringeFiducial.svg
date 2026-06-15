@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ArUco-style fiducial for FiducialMarkerTracker (6-DoF pose). 6x6 cells of 4 mm = 24 mm tag:
+  a 1-cell black border ring + a 4x4 interior bit pattern. Print at 100% scale.
+  Inspector (FiducialMarkerTracker): Marker Bits = 4, Marker Size Meters = 0.024 (the BLACK
+  square's outer side = 24 mm; adjust if you scale the print), Expected Pattern Rows = "1001;1100;0010;1011".
+  The interior pattern is rotationally unique, so the tracker recovers orientation unambiguously.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="24mm" height="24mm" viewBox="0 0 24 24">
+<rect x="0" y="0" width="24" height="24" fill="#ffffff"/>
+<rect x="0" y="0" width="4" height="4" fill="#000000"/>
+<rect x="4" y="0" width="4" height="4" fill="#000000"/>
+<rect x="8" y="0" width="4" height="4" fill="#000000"/>
+<rect x="12" y="0" width="4" height="4" fill="#000000"/>
+<rect x="16" y="0" width="4" height="4" fill="#000000"/>
+<rect x="20" y="0" width="4" height="4" fill="#000000"/>
+<rect x="0" y="4" width="4" height="4" fill="#000000"/>
+<rect x="8" y="4" width="4" height="4" fill="#000000"/>
+<rect x="12" y="4" width="4" height="4" fill="#000000"/>
+<rect x="20" y="4" width="4" height="4" fill="#000000"/>
+<rect x="0" y="8" width="4" height="4" fill="#000000"/>
+<rect x="12" y="8" width="4" height="4" fill="#000000"/>
+<rect x="16" y="8" width="4" height="4" fill="#000000"/>
+<rect x="20" y="8" width="4" height="4" fill="#000000"/>
+<rect x="0" y="12" width="4" height="4" fill="#000000"/>
+<rect x="4" y="12" width="4" height="4" fill="#000000"/>
+<rect x="8" y="12" width="4" height="4" fill="#000000"/>
+<rect x="16" y="12" width="4" height="4" fill="#000000"/>
+<rect x="20" y="12" width="4" height="4" fill="#000000"/>
+<rect x="0" y="16" width="4" height="4" fill="#000000"/>
+<rect x="8" y="16" width="4" height="4" fill="#000000"/>
+<rect x="20" y="16" width="4" height="4" fill="#000000"/>
+<rect x="0" y="20" width="4" height="4" fill="#000000"/>
+<rect x="4" y="20" width="4" height="4" fill="#000000"/>
+<rect x="8" y="20" width="4" height="4" fill="#000000"/>
+<rect x="12" y="20" width="4" height="4" fill="#000000"/>
+<rect x="16" y="20" width="4" height="4" fill="#000000"/>
+<rect x="20" y="20" width="4" height="4" fill="#000000"/>
+</svg>

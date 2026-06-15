@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Syringe barrel marker — print, cut along the outer border, wrap around the barrel.
+  Two-zone luminance design: a solid DARK zone near the plunger end and a solid LIGHT
+  (white) zone near the needle end, with a high-contrast checker strip between them for
+  edge contrast. The tracker (SyringeOverlayTracker, MarkerDetectionMode.Luminance)
+  finds the dark zone and the light zone by brightness and uses the line between them
+  as the barrel axis — lighting-robust, no colour dependence.
+
+  Print at 100% scale. Designed for a ~10 mm barrel: the wrap length (long axis) is
+  ~70 mm, height ~16 mm. Scale uniformly if your barrel differs; keep the dark and
+  light zones each at least ~12 mm long so they are easy to see.
+  1 user unit = 1 mm (viewBox in mm via width/height in mm).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="70mm" height="16mm" viewBox="0 0 70 16">
+
+  <!-- White backing for the whole strip -->
+  <rect x="0" y="0" width="70" height="16" fill="#ffffff" stroke="#000000" stroke-width="0.2"/>
+
+  <!-- DARK zone (plunger end) : solid black, 0–24 mm -->
+  <rect x="0" y="0" width="24" height="16" fill="#000000"/>
+
+  <!-- Checker transition strip : 24–46 mm, 11 columns x 4 rows of 2 mm squares -->
+  <g fill="#000000">
+    <!-- row 0 (y 0-4): black at even columns -->
+    <rect x="24" y="0" width="2" height="4"/><rect x="28" y="0" width="2" height="4"/><rect x="32" y="0" width="2" height="4"/><rect x="36" y="0" width="2" height="4"/><rect x="40" y="0" width="2" height="4"/><rect x="44" y="0" width="2" height="4"/>
+    <!-- row 1 (y 4-8): black at odd columns -->
+    <rect x="26" y="4" width="2" height="4"/><rect x="30" y="4" width="2" height="4"/><rect x="34" y="4" width="2" height="4"/><rect x="38" y="4" width="2" height="4"/><rect x="42" y="4" width="2" height="4"/>
+    <!-- row 2 (y 8-12): black at even columns -->
+    <rect x="24" y="8" width="2" height="4"/><rect x="28" y="8" width="2" height="4"/><rect x="32" y="8" width="2" height="4"/><rect x="36" y="8" width="2" height="4"/><rect x="40" y="8" width="2" height="4"/><rect x="44" y="8" width="2" height="4"/>
+    <!-- row 3 (y 12-16): black at odd columns -->
+    <rect x="26" y="12" width="2" height="4"/><rect x="30" y="12" width="2" height="4"/><rect x="34" y="12" width="2" height="4"/><rect x="38" y="12" width="2" height="4"/><rect x="42" y="12" width="2" height="4"/>
+  </g>
+
+  <!-- LIGHT zone (needle end) : white (the backing), 46–70 mm — leave blank/white -->
+
+  <!-- Thin guide line marking the barrel axis direction (plunger -> needle) -->
+  <line x1="2" y1="8" x2="68" y2="8" stroke="#888888" stroke-width="0.15" stroke-dasharray="1 1"/>
+
+  <!-- End labels (small, do not affect detection much; cut off if undesired) -->
+  <text x="12" y="8.6" font-family="Arial, sans-serif" font-size="2.2" fill="#ffffff" text-anchor="middle">PLUNGER</text>
+  <text x="58" y="8.6" font-family="Arial, sans-serif" font-size="2.2" fill="#000000" text-anchor="middle">NEEDLE</text>
+</svg>
