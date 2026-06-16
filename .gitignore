@@ -77,3 +77,8 @@ crashlytics-build.properties
 
 .DS_Store
 
+
+# Build artifacts / non-code
+*_BurstDebugInformation_DoNotShip/
+study/
+*.pdf
