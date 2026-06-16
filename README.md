@@ -1,6 +1,12 @@
-# MR Template Test
+# MR Injection Training
 
-Unity mixed-reality project built on the **MR Template** stack. It implements a **syringe calibration and injection training** flow: marker-based syringe tracking, surface placement, coaching UI, hand overlays, and scored tutorial steps (calibration, fill, bubble check, angle, insertion/flow, removal).
+Unity mixed-reality injection-technique trainer for standalone headsets (Meta Quest 3). It runs **markerless**, with no haptic device, instrumented prop, or external tracker: the syringe is reconstructed from **articulated hand tracking**, and the app overlays **real-time 3D geometric guidance** on a learner-placed injection site (a per-injection-type valid-angle cone plus colour-coded depth zones), then scores each attempt on angle, depth, speed, flow, and removal stability.
+
+To keep hand-tracked angle/depth usable while the gripping hand occludes the needle, the trainer uses a **center-snap** pose model that anchors the needle entry to the placed target and derives angle from a long, stable lever. Earlier marker-based detectors (ArUco and a custom checkerboard/band tracker) remain in the source but are **dormant** — see the tracking notes below.
+
+## How it works (pipeline)
+
+`Hand tracking → markerless syringe pose (sign anchor + center-snap) → per-type profile + angle/depth/speed metrics → 3D guidance overlay (valid-angle cone + depth zones) → scored, step-by-step coaching workflow`.
 
 ## Requirements
 
