@@ -37,7 +37,7 @@ namespace UnityEngine.XR.Templates.MR
         float m_SurfaceOpacity = 0.28f;
 
         [SerializeField]
-        Color m_SurfaceTint = new Color(0.12f, 0.82f, 1f, 0.28f);
+        Color m_SurfaceTint = new Color(0.6f, 0.15f, 0.85f, 0.28f);
 
         [SerializeField]
         Color m_PointColor = new Color(0.2f, 1f, 0.65f, 0.95f);
@@ -65,7 +65,7 @@ namespace UnityEngine.XR.Templates.MR
         float m_HandleKnobSize = 0.012f;
 
         [SerializeField]
-        Color m_HandleColor = new Color(1f, 0.72f, 0.18f, 0.95f);
+        Color m_HandleColor = new Color(0.2f, 0.5f, 1f, 0.95f);
 
         public bool isSelectingSurface => m_IsSelectingSurface;
         public bool hasPlacedSurface => m_HasPlacedSurface;

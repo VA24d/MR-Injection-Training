@@ -5,9 +5,9 @@ namespace UnityEngine.XR.Templates.MR
     /// <summary>
     /// Draws the 3D injection target guide at the pinched-surface center:
     ///  - a spot disc that shrinks (10 mm -> 4 mm) as the needle approaches,
-    ///  - a blue valid-angle band (two cones) for the selected injection type,
-    ///  - a green correct-depth segment and red over-depth segment along the ideal needle path,
-    ///  - an orange max-depth plane.
+    ///  - an amber entry-angle cone and matching amber depth zones (paper colour language),
+    ///  - cone turns green once θ is within the type's band,
+    ///  - depth geometry stays amber; green/yellow appear in on-surface coaching text.
     /// Surface + per-type config come from <see cref="SurfaceSelectionTool"/> and
     /// <see cref="SyringeCalibrationButtonBridge"/>; the live syringe pose only refines the spot
     /// size and the depth-guide azimuth, so the guide still renders before the syringe is tracked.
@@ -64,23 +64,19 @@ namespace UnityEngine.XR.Templates.MR
 
         [Header("Colors")]
         [SerializeField]
-        Color m_SpotColor = new Color(1f, 1f, 1f, 0.6f);
+        Color m_SpotColor = InjectionGuidancePalette.Spot;
 
         [SerializeField]
-        Color m_BandColor = new Color(0.2f, 0.5f, 1f, 0.35f);
+        [Tooltip("Entry-angle cone while θ is outside the type's target band.")]
+        Color m_BandColor = InjectionGuidancePalette.GeometryAmber;
 
         [SerializeField]
-        [Tooltip("Band tint while the live injection angle is inside the type's valid range.")]
-        Color m_BandInRangeColor = new Color(0.22f, 0.95f, 0.55f, 0.45f);
+        [Tooltip("Cone tint once θ is inside the valid band.")]
+        Color m_BandInRangeColor = InjectionGuidancePalette.GeometryOptimal;
 
         [SerializeField]
-        Color m_GreenColor = new Color(0.15f, 1f, 0.25f, 0.5f);
-
-        [SerializeField]
-        Color m_RedColor = new Color(1f, 0.2f, 0.15f, 0.6f);
-
-        [SerializeField]
-        Color m_OrangeColor = new Color(1f, 0.55f, 0.1f, 0.4f);
+        [Tooltip("All depth-zone geometry uses the same amber as the cone.")]
+        Color m_DepthGeometryColor = InjectionGuidancePalette.GeometryAmber;
 
         Transform m_Root;
         Transform m_Spot;
@@ -238,10 +234,13 @@ namespace UnityEngine.XR.Templates.MR
             m_ConeBand.SetPositionAndRotation(spot, Quaternion.FromToRotation(Vector3.up, normal));
             BuildConeRibs(bandFromNormal);
 
-            // Tint the band green only while thumb-locked and the live angle is in range.
+            // Paper: cone is blue for the valid band; turns green once θ enters the tolerance range.
             var angle = m_Tutorial.injectionAngleDegrees;
-            var inRange = nearSite && angle >= range.x && angle <= range.y;
-            SetBandColor(inRange ? m_BandInRangeColor : m_BandColor);
+            var angleInBand = angle >= range.x && angle <= range.y;
+            var bandGreen = step == SyringeCalibrationButtonBridge.TutorialStep.InjectionAngle
+                ? angleInBand
+                : nearSite && angleInBand;
+            SetBandColor(bandGreen ? m_BandInRangeColor : m_BandColor);
 
             // Depth zones stay anchored at the surface center. Only swing with the live thumb axis
             // once proximity lock engages; otherwise keep a stable nominal heading at the spot.
@@ -485,9 +484,9 @@ namespace UnityEngine.XR.Templates.MR
 
             m_SpotMat = CreateColoredMaterial(m_SpotColor);
             m_BandMat = CreateColoredMaterial(m_BandColor);
-            m_GreenMat = CreateColoredMaterial(m_GreenColor);
-            m_RedMat = CreateColoredMaterial(m_RedColor);
-            m_OrangeMat = CreateColoredMaterial(m_OrangeColor);
+            m_GreenMat = CreateColoredMaterial(m_DepthGeometryColor);
+            m_RedMat = CreateColoredMaterial(m_DepthGeometryColor);
+            m_OrangeMat = CreateColoredMaterial(m_DepthGeometryColor);
 
             m_Spot = CreateMeshObject("Injection Spot", m_DiscMesh, m_SpotMat);
             m_ConeBand = CreateMeshObject("Angle Band", m_ConeBandMesh, m_BandMat);

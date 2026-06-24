@@ -81,10 +81,16 @@ namespace UnityEngine.XR.Templates.MR
         bool m_ShowGuidanceArrows = true;
 
         [SerializeField]
-        Color m_GuidanceGoodColor = new Color(0.15f, 1f, 0.25f, 0.95f);
+        Color m_GuidanceGeometryColor = InjectionGuidancePalette.GeometryAmber;
 
         [SerializeField]
-        Color m_GuidanceBadColor = new Color(1f, 0.95f, 0.1f, 1f);
+        Color m_GuidanceOptimalColor = InjectionGuidancePalette.GeometryOptimal;
+
+        [SerializeField]
+        Color m_GuidanceTextOptimalColor = InjectionGuidancePalette.TextOptimal;
+
+        [SerializeField]
+        Color m_GuidanceTextWarningColor = InjectionGuidancePalette.TextWarning;
 
         [SerializeField, Min(0.001f)]
         float m_GuidanceArrowLength = 0.09f;
@@ -102,7 +108,10 @@ namespace UnityEngine.XR.Templates.MR
         float m_GuidanceTextCharacterSize = 0.0038f;
 
         [SerializeField]
-        Color m_TextColor = Color.white;
+        Color m_TextColorInBand = InjectionGuidancePalette.TextOptimal;
+
+        [SerializeField]
+        Color m_TextColorOutOfBand = InjectionGuidancePalette.TextWarning;
 
         [SerializeField, Min(0.0005f)]
         float m_TextCharacterSize = 0.0021f;
@@ -111,7 +120,10 @@ namespace UnityEngine.XR.Templates.MR
         float m_TextOffsetFromArc = 0.007f;
 
         [SerializeField, Min(0f)]
-        float m_TextLiftAbovePlane = 0.015f;
+        float m_TextLiftAbovePlane = 0.04f;
+
+        [SerializeField, Min(0f)]
+        float m_GuidanceTextLiftAboveBasePoint = 0.09f;
 
         [Header("Runtime state")]
         [SerializeField]
@@ -453,7 +465,10 @@ namespace UnityEngine.XR.Templates.MR
                     textDirection.Normalize();
 
                     m_AngleText.text = $"{data.angleDegrees:0.0}°";
-                    m_AngleText.color = m_TextColor;
+                    var angleInBand = m_Tutorial != null &&
+                        data.angleDegrees >= m_Tutorial.targetInjectionAngleRange.x &&
+                        data.angleDegrees <= m_Tutorial.targetInjectionAngleRange.y;
+                    m_AngleText.color = angleInBand ? m_TextColorInBand : m_TextColorOutOfBand;
                     m_AngleText.characterSize = m_TextCharacterSize;
                     m_AngleText.transform.position =
                         data.insertionPoint +
@@ -507,7 +522,7 @@ namespace UnityEngine.XR.Templates.MR
 
             var showArrow = false;
             var showDot = false;
-            var color = m_GuidanceBadColor;
+            var isOptimal = false;
             var text = string.Empty;
             var basePoint = data.insertionPoint + data.planeNormal * 0.025f;
             var arrowDir = data.planeNormal;
@@ -521,7 +536,7 @@ namespace UnityEngine.XR.Templates.MR
                 if (inRange)
                 {
                     showDot = true;
-                    color = m_GuidanceGoodColor;
+                    isOptimal = true;
                     text = "Maintain angle";
                     if (m_Tutorial.angleHoldSecondsRemaining > 0.01f)
                         text += " (" + m_Tutorial.angleHoldSecondsRemaining.ToString("F1") + "s)";
@@ -557,7 +572,7 @@ namespace UnityEngine.XR.Templates.MR
                 else
                 {
                     showDot = true;
-                    color = m_GuidanceGoodColor;
+                    isOptimal = true;
                     text = "Hold or start dispensing";
                 }
             }
@@ -570,7 +585,6 @@ namespace UnityEngine.XR.Templates.MR
                 if (unstable)
                 {
                     showDot = true;
-                    color = m_GuidanceBadColor;
                     text = "Keep syringe steady";
                 }
                 else if (flowDelta < -0.25f)
@@ -589,7 +603,7 @@ namespace UnityEngine.XR.Templates.MR
                 {
                     showArrow = true;
                     arrowDir = data.tipDirection;
-                    color = m_GuidanceGoodColor;
+                    isOptimal = true;
                     text = "Maintain flow";
                 }
 
@@ -620,7 +634,7 @@ namespace UnityEngine.XR.Templates.MR
                     {
                         showArrow = true;
                         arrowDir = -data.planeNormal;
-                        color = m_GuidanceGoodColor;
+                        isOptimal = true;
                         text = "Hold or dispense";
                     }
                 }
@@ -632,7 +646,6 @@ namespace UnityEngine.XR.Templates.MR
                     if (unstable)
                     {
                         showDot = true;
-                        color = m_GuidanceBadColor;
                         text = "Keep syringe steady";
                     }
                     else if (flowDelta < -0.25f)
@@ -651,13 +664,16 @@ namespace UnityEngine.XR.Templates.MR
                     {
                         showArrow = true;
                         arrowDir = data.tipDirection;
-                        color = m_GuidanceGoodColor;
+                        isOptimal = true;
                         text = "Maintain flow";
                     }
 
                     text += " (" + (m_Tutorial.plungerTravelNormalized * 100f).ToString("F0") + "%)";
                 }
             }
+
+            var geometryColor = isOptimal ? m_GuidanceOptimalColor : m_GuidanceGeometryColor;
+            var textColor = isOptimal ? m_GuidanceTextOptimalColor : m_GuidanceTextWarningColor;
 
             m_GuidanceArrow.enabled = showArrow;
             m_GuidanceDot.gameObject.SetActive(showDot);
@@ -684,8 +700,8 @@ namespace UnityEngine.XR.Templates.MR
                 m_GuidanceArrow.SetPosition(4, wingB);
                 m_GuidanceArrow.startWidth = m_GuidanceArrowWidth;
                 m_GuidanceArrow.endWidth = m_GuidanceArrowWidth;
-                m_GuidanceArrow.startColor = color;
-                m_GuidanceArrow.endColor = color;
+                m_GuidanceArrow.startColor = geometryColor;
+                m_GuidanceArrow.endColor = geometryColor;
             }
 
             if (showDot)
@@ -693,16 +709,16 @@ namespace UnityEngine.XR.Templates.MR
                 m_GuidanceDot.position = basePoint;
                 m_GuidanceDot.localScale = Vector3.one * m_GuidanceDotSize;
                 if (m_GuidanceDot.TryGetComponent<Renderer>(out var dotRenderer) && dotRenderer.sharedMaterial != null)
-                    dotRenderer.sharedMaterial.color = color;
+                    dotRenderer.sharedMaterial.color = geometryColor;
             }
 
             if (m_GuidanceText.gameObject.activeSelf)
             {
                 m_GuidanceText.text = text;
-                m_GuidanceText.color = color;
+                m_GuidanceText.color = textColor;
                 m_GuidanceText.characterSize = m_GuidanceTextCharacterSize;
                 m_GuidanceText.fontSize = 64;
-                m_GuidanceText.transform.position = basePoint + data.planeNormal * 0.03f;
+                m_GuidanceText.transform.position = basePoint + data.planeNormal * m_GuidanceTextLiftAboveBasePoint;
 
                 if (m_MainCamera != null)
                     m_GuidanceText.transform.rotation = Quaternion.LookRotation(m_GuidanceText.transform.position - m_MainCamera.transform.position, data.planeNormal);
@@ -772,7 +788,7 @@ namespace UnityEngine.XR.Templates.MR
             m_AngleText.anchor = TextAnchor.MiddleCenter;
             m_AngleText.alignment = TextAlignment.Center;
             m_AngleText.characterSize = m_TextCharacterSize;
-            m_AngleText.color = m_TextColor;
+            m_AngleText.color = m_TextColorOutOfBand;
             m_AngleText.text = string.Empty;
 
             var guidanceTextObject = new GameObject("Guidance Text");
@@ -782,7 +798,7 @@ namespace UnityEngine.XR.Templates.MR
             m_GuidanceText.anchor = TextAnchor.MiddleCenter;
             m_GuidanceText.alignment = TextAlignment.Center;
             m_GuidanceText.characterSize = m_GuidanceTextCharacterSize;
-            m_GuidanceText.color = m_GuidanceBadColor;
+            m_GuidanceText.color = m_GuidanceTextWarningColor;
             m_GuidanceText.richText = true;
             m_GuidanceText.text = string.Empty;
 
@@ -795,7 +811,7 @@ namespace UnityEngine.XR.Templates.MR
             if (dotObj.TryGetComponent<Renderer>(out var dotRenderer))
             {
                 dotRenderer.sharedMaterial = m_RuntimeGuidanceMaterial;
-                dotRenderer.sharedMaterial.color = m_GuidanceGoodColor;
+                dotRenderer.sharedMaterial.color = m_GuidanceOptimalColor;
             }
             m_GuidanceDot = dotObj.transform;
             m_GuidanceDot.gameObject.SetActive(false);
