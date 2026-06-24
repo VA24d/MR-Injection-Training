@@ -10,13 +10,13 @@ To keep hand-tracked angle/depth usable while the gripping hand occludes the nee
 
 ## Requirements
 
-- **Unity Editor** `6000.3.8f1` (Unity 6), matching `ProjectSettings/ProjectVersion.txt`
+- **Unity Editor** `6000.3.9f1` (Unity 6), matching `ProjectSettings/ProjectVersion.txt`
 - **Target devices**: Meta Quest / OpenXR-capable headset (project uses `com.unity.xr.meta-openxr`, Meta XR SDK, XR Interaction Toolkit, XR Hands)
 - **Platform**: Configure Android build settings in Unity for device deployment as needed for your lab hardware
 
 ## Opening the project
 
-1. Install Unity Hub and add editor version **6000.3.8f1**
+1. Install Unity Hub and add editor version **6000.3.9f1**
 2. Open this folder as a Unity project
 3. Main scene: `Assets/Scenes/SampleScene.unity`
 
